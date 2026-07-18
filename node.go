@@ -1,5 +1,9 @@
 package pipeline
 
+import (
+	"fmt"
+)
+
 // Node is the processing unit of a Pipeline. Each Node declares its input/output
 // Slots and implements the execution logic that transforms input Artifacts into
 // output Artifacts.
@@ -10,6 +14,9 @@ type Node interface {
 	// Description returns a human-readable summary of this Node's purpose.
 	Description() string
 
+	// Type returns the Node's type name like "PE Image Loader".
+	Type() string
+
 	// BuildTag is used to define the Node require environment like
 	// "//go:build windows && amd64" or "windows && amd64".
 	// If current environment is not matched, Node can still execute,
@@ -17,22 +24,66 @@ type Node interface {
 	BuildTag() string
 
 	// Inputs returns the list of input Slots this Node expects.
-	// Called at build time for link validation; must be deterministic.
+	// Called at build time for link validation.
 	Inputs() []*InputSlot
 
 	// Outputs returns the list of output Slots this Node produces.
-	// Called at build time for link validation; must be deterministic.
+	// Called at build time for link validation.
 	Outputs() []*OutputSlot
 
 	// Initialize is used to initialize the Node,
-	// it will be called once when added to the pipeline.
+	// it will be called once when added to the Pipeline.
 	Initialize() error
 
-	// Execute is used to execute the Node's processing logic,
-	// it will be called when the pipeline Execute.
+	// Execute is used to execute the Node's processing logic.
+	// it will be called when the Pipeline Executes.
+	// it must be safe for concurrent use by multiple goroutines.
 	Execute(ctx *Context) error
 
 	// Close is used to release the resources held by this Node,
 	// it will be called once when this Node be removed or Pipeline Close.
 	Close() error
+}
+
+func checkNode(node Node) error {
+	// check the same input/output slot name
+	inputs := node.Inputs()
+	iNames := make(map[string]struct{}, len(inputs))
+	for _, slot := range inputs {
+		_, ok := iNames[slot.Name]
+		if ok {
+			return fmt.Errorf("duplicate input slot name: \"%s\"", slot.Name)
+		}
+		iNames[slot.Name] = struct{}{}
+	}
+	outputs := node.Outputs()
+	oNames := make(map[string]struct{}, len(outputs))
+	for _, slot := range outputs {
+		_, ok := oNames[slot.Name]
+		if ok {
+			return fmt.Errorf("duplicate output slot name: \"%s\"", slot.Name)
+		}
+		oNames[slot.Name] = struct{}{}
+	}
+	return nil
+}
+
+func getNodeInputSlot(node Node, name string) (*InputSlot, error) {
+	slots := node.Inputs()
+	for _, slot := range slots {
+		if slot.Name == name {
+			return slot, nil
+		}
+	}
+	return nil, fmt.Errorf("input slot \"%s\" is not found", name)
+}
+
+func getNodeOutputSlot(node Node, name string) (*OutputSlot, error) {
+	slots := node.Outputs()
+	for _, slot := range slots {
+		if slot.Name == name {
+			return slot, nil
+		}
+	}
+	return nil, fmt.Errorf("output slot \"%s\" is not found", name)
 }
