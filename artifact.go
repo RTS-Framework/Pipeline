@@ -4,69 +4,79 @@ import (
 	"os"
 )
 
-var (
-	TypeShellcode = ArtifactType{
-		Name:        "Shellcode",
-		Description: "generic shellcode",
-	}
-	TypeRuntimeTemplate = ArtifactType{
-		Name:        "RuntimeTemplate",
-		Description: "Gleam-RT template",
-	}
-)
+type Artifact interface {
+	Value() any
+	Type() ArtifactType
+}
 
+// ArtifactType defines the artifact type information.
 type ArtifactType struct {
 	Name        string
 	Description string
 }
 
-type Artifact interface {
-	Value() (any, error)
-	Type() ArtifactType
-}
-
-type ObjectArtifact struct {
-	artifactType ArtifactType
-
-	value any
-}
-
-func NewObjectArtifact(t ArtifactType, value any) *ObjectArtifact {
-	return &ObjectArtifact{
-		artifactType: t,
-		value:        value,
+// define the built-in artifact type.
+var (
+	TypeEXEImage = ArtifactType{
+		Name:        "EXE-Image",
+		Description: "exe image file",
 	}
+	TypeDLLImage = ArtifactType{
+		Name:        "DLL-Image",
+		Description: "dll image file",
+	}
+	TypeShellcode = ArtifactType{
+		Name:        "Shellcode",
+		Description: "generic shellcode",
+	}
+	TypeRuntime = ArtifactType{
+		Name:        "Runtime",
+		Description: "Gleam-RT template",
+	}
+	TypePELoader = ArtifactType{
+		Name:        "PELoader",
+		Description: "PE Loader template",
+	}
+)
+
+type MemoryArtifact struct {
+	typ ArtifactType
+	val any
 }
 
-func (a *ObjectArtifact) Type() ArtifactType {
-	return a.artifactType
+func NewMemoryArtifact(typ ArtifactType, val any) *MemoryArtifact {
+	return &MemoryArtifact{typ: typ, val: val}
 }
 
-func (a *ObjectArtifact) Value() (any, error) {
-	return a.value, nil
+func (a *MemoryArtifact) Type() ArtifactType {
+	return a.typ
+}
+
+func (a *MemoryArtifact) Value() any {
+	return a.val
 }
 
 type FileArtifact struct {
-	artifactType ArtifactType
-
-	path string
+	typ  ArtifactType
+	data []byte
 }
 
-func NewFileArtifact(t ArtifactType, path string) *FileArtifact {
-	return &FileArtifact{
-		artifactType: t,
-		path:         path,
+func NewFileArtifact(typ ArtifactType, path string) (*FileArtifact, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
 	}
+	art := FileArtifact{
+		typ:  typ,
+		data: data,
+	}
+	return &art, nil
 }
 
 func (a *FileArtifact) Type() ArtifactType {
-	return a.artifactType
+	return a.typ
 }
 
-func (a *FileArtifact) Path() string {
-	return a.path
-}
-
-func (a *FileArtifact) Value() (any, error) {
-	return os.ReadFile(a.path)
+func (a *FileArtifact) Value() any {
+	return a.data
 }
