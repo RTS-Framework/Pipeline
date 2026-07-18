@@ -6,22 +6,26 @@ import (
 	"sync"
 )
 
-type Pipeline struct {
-	logger *logger
+type Options struct {
+	LogDirectory string
 
-	nodes map[string]*pNode
-	links map[string]*pLink
+	BeforeNodeInitialize func(node Node) error
+	AfterNodeInitialize  func(node Node) error
+	BeforeNodeExecute    func(node Node) error
+	AfterNodeExecute     func(node Node) error
+}
+
+type Pipeline struct {
+	nodes map[string]Node
+	links map[string]*Link
+
+	// logger counter for create context
+	counter int64
 
 	rwm sync.RWMutex
 }
 
-type pNode struct {
-	node Node
-	done chan struct{}
-	err  error
-}
-
-type pLink struct {
+type Link struct {
 	path string
 
 	srcNode Node
@@ -29,23 +33,29 @@ type pLink struct {
 
 	dstNode Node
 	dstSlot *InputSlot
+}
 
-	channel chan *Artifact
+func (l *Link) String() string {
+	return l.path
 }
 
 func NewPipeline() *Pipeline {
-	p := Pipeline{
-		nodes: make(map[string]*pNode),
-		links: make(map[string]*pLink),
+	pipeline := Pipeline{
+		nodes: make(map[string]Node),
+		links: make(map[string]*Link),
 	}
-	return &p
+	return &pipeline
 }
 
 func (p *Pipeline) AddNode(node Node) error {
+	err := checkNode(node)
+	if err != nil {
+		return err
+	}
 	p.rwm.Lock()
 	defer p.rwm.Unlock()
 	name := node.Name()
-	_, err := p.getNode(name)
+	_, err = p.getNode(name)
 	if err == nil {
 		return fmt.Errorf("node \"%s\" already exists", name)
 	}
@@ -53,9 +63,7 @@ func (p *Pipeline) AddNode(node Node) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize node: %s", err)
 	}
-	p.nodes[name] = &pNode{
-		node: node,
-	}
+	p.nodes[name] = node
 	return nil
 }
 
@@ -67,14 +75,14 @@ func (p *Pipeline) RemoveNode(name string) error {
 		return err
 	}
 	delete(p.nodes, name)
-	err = node.node.Close()
+	err = node.Close()
 	if err != nil {
 		return fmt.Errorf("failed to clean node: %s", err)
 	}
 	return nil
 }
 
-func (p *Pipeline) getNode(name string) (*pNode, error) {
+func (p *Pipeline) getNode(name string) (Node, error) {
 	if node, ok := p.nodes[name]; ok {
 		return node, nil
 	}
@@ -87,15 +95,16 @@ func (p *Pipeline) getNode(name string) (*pNode, error) {
 func (p *Pipeline) Link(srcNode, srcSlot, dstNode, dstSlot string) error {
 	p.rwm.Lock()
 	defer p.rwm.Unlock()
-	_, err := p.getLink(srcNode, srcSlot, dstNode, dstSlot)
+	path := buildLinkPath(srcNode, srcSlot, dstNode, dstSlot)
+	_, err := p.getLink(path)
 	if err == nil {
-		return errors.New("this path is already linked")
+		return fmt.Errorf("\"%s\" is already linked", path)
 	}
 	sNode, err := p.getNode(srcNode)
 	if err != nil {
 		return err
 	}
-	sSlot, err := getNodeOutputSlot(sNode.node, srcSlot)
+	sSlot, err := getNodeOutputSlot(sNode, srcSlot)
 	if err != nil {
 		return err
 	}
@@ -103,19 +112,18 @@ func (p *Pipeline) Link(srcNode, srcSlot, dstNode, dstSlot string) error {
 	if err != nil {
 		return err
 	}
-	dSlot, err := getNodeInputSlot(dNode.node, dstSlot)
+	dSlot, err := getNodeInputSlot(dNode, dstSlot)
 	if err != nil {
 		return err
 	}
 	if !isSlotTypeMatched(dSlot.Accepted, sSlot.Type) {
 		return errors.New("mismatched slot type")
 	}
-	path := buildLinkPath(srcNode, srcSlot, dstNode, dstSlot)
-	p.links[path] = &pLink{
+	p.links[path] = &Link{
 		path:    path,
-		srcNode: sNode.node,
+		srcNode: sNode,
 		srcSlot: sSlot,
-		dstNode: dNode.node,
+		dstNode: dNode,
 		dstSlot: dSlot,
 	}
 	return nil
@@ -125,17 +133,16 @@ func (p *Pipeline) Link(srcNode, srcSlot, dstNode, dstSlot string) error {
 func (p *Pipeline) Unlink(srcNode, srcSlot, dstNode, dstSlot string) error {
 	p.rwm.Lock()
 	defer p.rwm.Unlock()
-	_, err := p.getLink(srcNode, srcSlot, dstNode, dstSlot)
+	path := buildLinkPath(srcNode, srcSlot, dstNode, dstSlot)
+	_, err := p.getLink(path)
 	if err != nil {
 		return err
 	}
-	path := buildLinkPath(srcNode, srcSlot, dstNode, dstSlot)
 	delete(p.links, path)
 	return nil
 }
 
-func (p *Pipeline) getLink(srcNode, srcSlot, dstNode, dstSlot string) (*pLink, error) {
-	path := buildLinkPath(srcNode, srcSlot, dstNode, dstSlot)
+func (p *Pipeline) getLink(path string) (*Link, error) {
 	if link, ok := p.links[path]; ok {
 		return link, nil
 	}
@@ -146,7 +153,10 @@ func (p *Pipeline) Validate() error {
 	return nil
 }
 
-func (p *Pipeline) Execute(ctx *Context) error {
+func (p *Pipeline) Execute(opts *Options) error {
+	if opts == nil {
+		opts = &Options{}
+	}
 	return nil
 }
 
