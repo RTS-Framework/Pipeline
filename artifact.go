@@ -1,12 +1,15 @@
 package pipeline
 
 import (
-	"os"
+	"fmt"
+	"strings"
 )
 
-type Artifact interface {
-	Value() any
-	Type() ArtifactType
+// Artifact contains the output artifact information.
+type Artifact struct {
+	Name string
+	Data []byte
+	Type ArtifactType
 }
 
 // ArtifactType defines the artifact type information.
@@ -39,44 +42,24 @@ var (
 	}
 )
 
-type MemoryArtifact struct {
-	typ ArtifactType
-	val any
+var regArtifactTypes map[string]ArtifactType
+
+func init() {
+	regArtifactTypes = make(map[string]ArtifactType, 16)
+	regArtifactTypes[TypeEXEImage.Name] = TypeEXEImage
+	regArtifactTypes[TypeDLLImage.Name] = TypeDLLImage
+	regArtifactTypes[TypeShellcode.Name] = TypeShellcode
+	regArtifactTypes[TypeRuntime.Name] = TypeRuntime
+	regArtifactTypes[TypePELoader.Name] = TypePELoader
 }
 
-func NewMemoryArtifact(typ ArtifactType, val any) *MemoryArtifact {
-	return &MemoryArtifact{typ: typ, val: val}
-}
-
-func (a *MemoryArtifact) Type() ArtifactType {
-	return a.typ
-}
-
-func (a *MemoryArtifact) Value() any {
-	return a.val
-}
-
-type FileArtifact struct {
-	typ  ArtifactType
-	data []byte
-}
-
-func NewFileArtifact(typ ArtifactType, path string) (*FileArtifact, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+// RegisterArtifactType is used to register the artifact type.
+func RegisterArtifactType(typ ArtifactType) error {
+	for name := range regArtifactTypes {
+		if strings.ToLower(name) == strings.ToLower(typ.Name) {
+			return fmt.Errorf("artifact type %s already exists", typ.Name)
+		}
 	}
-	art := FileArtifact{
-		typ:  typ,
-		data: data,
-	}
-	return &art, nil
-}
-
-func (a *FileArtifact) Type() ArtifactType {
-	return a.typ
-}
-
-func (a *FileArtifact) Value() any {
-	return a.data
+	regArtifactTypes[typ.Name] = typ
+	return nil
 }
