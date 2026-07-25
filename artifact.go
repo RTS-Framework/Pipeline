@@ -13,6 +13,12 @@ type Artifact struct {
 	Type ArtifactType
 }
 
+// Clone is used to clone the Artifact structure.
+func (art *Artifact) Clone() *Artifact {
+	clone := *art
+	return &clone
+}
+
 // ArtifactType defines the artifact type information.
 type ArtifactType struct {
 	Name        string
