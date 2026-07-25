@@ -11,11 +11,11 @@ type Node interface {
 	// Name returns a unique identifier for this Node within the Pipeline.
 	Name() string
 
-	// Description returns a human-readable summary of this Node's purpose.
-	Description() string
-
 	// Type returns the Node's type name like "PE Image Loader".
 	Type() string
+
+	// Description returns a human-readable summary of this Node's purpose.
+	Description() string
 
 	// BuildTag is used to define the Node require environment like
 	// "//go:build windows && amd64" or "windows && amd64".
@@ -45,13 +45,13 @@ type Node interface {
 	Close() error
 }
 
-func checkNode(node Node) error {
+// CheckNode is used to check this Node implement is valid.
+func CheckNode(node Node) error {
 	// check the same input/output slot name
 	inputs := node.Inputs()
 	iNames := make(map[string]struct{}, len(inputs))
 	for _, slot := range inputs {
-		_, ok := iNames[slot.Name]
-		if ok {
+		if _, ok := iNames[slot.Name]; ok {
 			return fmt.Errorf("duplicate input slot name: \"%s\"", slot.Name)
 		}
 		iNames[slot.Name] = struct{}{}
@@ -59,8 +59,7 @@ func checkNode(node Node) error {
 	outputs := node.Outputs()
 	oNames := make(map[string]struct{}, len(outputs))
 	for _, slot := range outputs {
-		_, ok := oNames[slot.Name]
-		if ok {
+		if _, ok := oNames[slot.Name]; ok {
 			return fmt.Errorf("duplicate output slot name: \"%s\"", slot.Name)
 		}
 		oNames[slot.Name] = struct{}{}
