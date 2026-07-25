@@ -3,12 +3,13 @@ package pipeline
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // Artifact contains the output artifact information.
 type Artifact struct {
 	Name string
-	Data []byte
+	Data any
 	Type ArtifactType
 }
 
@@ -18,48 +19,25 @@ type ArtifactType struct {
 	Description string
 }
 
-// define the built-in artifact type.
 var (
-	TypeEXEImage = ArtifactType{
-		Name:        "EXE-Image",
-		Description: "exe image file",
-	}
-	TypeDLLImage = ArtifactType{
-		Name:        "DLL-Image",
-		Description: "dll image file",
-	}
-	TypeShellcode = ArtifactType{
-		Name:        "Shellcode",
-		Description: "generic shellcode",
-	}
-	TypeRuntime = ArtifactType{
-		Name:        "Runtime",
-		Description: "Gleam-RT template",
-	}
-	TypePELoader = ArtifactType{
-		Name:        "PELoader",
-		Description: "PE Loader template",
-	}
+	artifactTypes   map[string]ArtifactType
+	artifactTypesMu sync.Mutex
 )
 
-var regArtifactTypes map[string]ArtifactType
-
 func init() {
-	regArtifactTypes = make(map[string]ArtifactType, 16)
-	regArtifactTypes[TypeEXEImage.Name] = TypeEXEImage
-	regArtifactTypes[TypeDLLImage.Name] = TypeDLLImage
-	regArtifactTypes[TypeShellcode.Name] = TypeShellcode
-	regArtifactTypes[TypeRuntime.Name] = TypeRuntime
-	regArtifactTypes[TypePELoader.Name] = TypePELoader
+	artifactTypes = make(map[string]ArtifactType, 64)
 }
 
-// RegisterArtifactType is used to register the artifact type.
-func RegisterArtifactType(typ ArtifactType) error {
-	for name := range regArtifactTypes {
-		if strings.ToLower(name) == strings.ToLower(typ.Name) {
+// RegisterArtifactTypes is used to register the artifact type.
+func RegisterArtifactTypes(types ...ArtifactType) error {
+	artifactTypesMu.Lock()
+	defer artifactTypesMu.Unlock()
+	for _, typ := range types {
+		key := strings.ToLower(typ.Name)
+		if _, ok := artifactTypes[key]; ok {
 			return fmt.Errorf("artifact type %s already exists", typ.Name)
 		}
+		artifactTypes[key] = typ
 	}
-	regArtifactTypes[typ.Name] = typ
 	return nil
 }
