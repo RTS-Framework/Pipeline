@@ -1,107 +1,86 @@
 package pipeline
 
 import (
-	"errors"
-	"os"
+	"bytes"
 	"testing"
 
-	"github.com/For-ACGN/monkey"
 	"github.com/stretchr/testify/require"
 )
 
-const testLogFile = "testdata/test.log"
-
 func TestLogger(t *testing.T) {
 	t.Run("common", func(t *testing.T) {
-		defer func() {
-			err := os.Remove(testLogFile)
-			require.NoError(t, err)
-		}()
+		lg := NewLogger(nil)
 
-		lg, err := newLogger(testLogFile)
-		require.NoError(t, err)
-
-		lg.Info("info log")
-		lg.Infof("%s", "infof log")
-
-		lg.Warning("warning log")
-		lg.Warningf("%s", "warningf log")
-
-		lg.Error("error log")
-		lg.Errorf("%s", "errorf log")
-
-		lg.Fatal("test func", "fatal log")
-		lg.Fatalf("test func", "%s", "fatalf log")
-
-		err = lg.Close()
-		require.NoError(t, err)
+		testPrintLog(lg)
 	})
 
-	t.Run("no file path", func(t *testing.T) {
-		lg, err := newLogger("")
-		require.NoError(t, err)
+	t.Run("debug", func(t *testing.T) {
+		lg := NewLogger(nil)
+		lg.SetLevel(LevelDebug)
 
-		lg.Info("info log")
-		lg.Infof("%s", "infof log")
-
-		lg.Warning("warning log")
-		lg.Warningf("%s", "warningf log")
-
-		lg.Error("error log")
-		lg.Errorf("%s", "errorf log")
-
-		lg.Fatal("test func", "fatal log")
-		lg.Fatalf("test func", "%s", "fatalf log")
-
-		err = lg.Close()
-		require.NoError(t, err)
+		testPrintLog(lg)
 	})
 
-	t.Run("failed to make directory", func(t *testing.T) {
-		patch := func(string, os.FileMode) error {
-			return errors.New("monkey error")
-		}
-		pg := monkey.Patch(os.MkdirAll, patch)
-		defer pg.Unpatch()
+	t.Run("info", func(t *testing.T) {
+		lg := NewLogger(nil)
+		lg.SetLevel(LevelInfo)
 
-		lg, err := newLogger(testLogFile)
-		require.EqualError(t, err, "monkey error")
-		require.Nil(t, lg)
+		testPrintLog(lg)
 	})
 
-	t.Run("failed to open file", func(t *testing.T) {
-		patch := func(string, int, os.FileMode) (*os.File, error) {
-			return nil, errors.New("monkey error")
-		}
-		pg := monkey.Patch(os.OpenFile, patch)
-		defer pg.Unpatch()
+	t.Run("warning", func(t *testing.T) {
+		lg := NewLogger(nil)
+		lg.SetLevel(LevelWarning)
 
-		lg, err := newLogger(testLogFile)
-		require.EqualError(t, err, "monkey error")
-		require.Nil(t, lg)
+		testPrintLog(lg)
 	})
 
-	t.Run("failed to close file", func(t *testing.T) {
-		defer func() {
-			err := os.Remove(testLogFile)
-			require.NoError(t, err)
-		}()
+	t.Run("error", func(t *testing.T) {
+		lg := NewLogger(nil)
+		lg.SetLevel(LevelError)
 
-		var file *os.File
-		patch := func() error {
-			return errors.New("monkey error")
-		}
-		pg := monkey.PatchMethod(file, "Close", patch)
-		defer pg.Unpatch()
-
-		lg, err := newLogger(testLogFile)
-		require.NoError(t, err)
-
-		err = lg.Close()
-		require.EqualError(t, err, "monkey error")
-
-		pg.Unpatch()
-		err = lg.Close()
-		require.NoError(t, err)
+		testPrintLog(lg)
 	})
+
+	t.Run("fatal", func(t *testing.T) {
+		lg := NewLogger(nil)
+		lg.SetLevel(LevelFatal)
+
+		testPrintLog(lg)
+	})
+
+	t.Run("discard", func(t *testing.T) {
+		lg := NewLogger(nil)
+		lg.SetLevel(LevelDiscard)
+
+		testPrintLog(lg)
+	})
+
+	t.Run("multi writer", func(t *testing.T) {
+		buf := bytes.NewBuffer(make([]byte, 0, 512))
+
+		lg := NewLogger(buf)
+		lg.SetLevel(LevelDebug)
+
+		testPrintLog(lg)
+
+		require.NotEmpty(t, buf.String())
+	})
+}
+
+func testPrintLog(logger Logger) {
+	logger.Debug("debug log")
+	logger.Debugf("%s", "debugf log")
+
+	logger.Info("info log")
+	logger.Infof("%s", "infof log")
+
+	logger.Warning("warning log")
+	logger.Warningf("%s", "warningf log")
+
+	logger.Error("error log")
+	logger.Errorf("%s", "errorf log")
+
+	logger.Fatal("test func", "fatal log")
+	logger.Fatalf("test func", "%s", "fatalf log")
 }
