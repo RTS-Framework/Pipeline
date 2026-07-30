@@ -6,8 +6,9 @@ import (
 	"sync"
 )
 
+// Options contains the option for Pipeline.Execute.
 type Options struct {
-	LogDirectory string
+	Logger Logger
 
 	BeforeNodeInitialize func(node Node) error
 	AfterNodeInitialize  func(node Node) error
@@ -15,6 +16,8 @@ type Options struct {
 	AfterNodeExecute     func(node Node) error
 }
 
+// Pipeline is a parallel directed acyclic graph (DAG) of processing nodes.
+// It manages node registration, linking, validation, and execution.
 type Pipeline struct {
 	nodes map[string]Node
 	links map[string]*Link
@@ -25,20 +28,7 @@ type Pipeline struct {
 	rwm sync.RWMutex
 }
 
-type Link struct {
-	path string
-
-	srcNode Node
-	srcSlot *OutputSlot
-
-	dstNode Node
-	dstSlot *InputSlot
-}
-
-func (l *Link) String() string {
-	return l.path
-}
-
+// NewPipeline is used to create a new empty Pipeline instance.
 func NewPipeline() *Pipeline {
 	pipeline := Pipeline{
 		nodes: make(map[string]Node),
@@ -47,8 +37,11 @@ func NewPipeline() *Pipeline {
 	return &pipeline
 }
 
+// AddNode is used to register a new node to the pipeline.
+// The node must pass validation (see CheckNode) and have a unique name.
+// Upon successful addition, the node's Initialize method is called once.
 func (p *Pipeline) AddNode(node Node) error {
-	err := checkNode(node)
+	err := CheckNode(node)
 	if err != nil {
 		return err
 	}
@@ -67,6 +60,12 @@ func (p *Pipeline) AddNode(node Node) error {
 	return nil
 }
 
+// RemoveNode is used to remove a node from the pipeline by its name.
+// The node's Close method is called to release held resources.
+//
+// Note: This does not automatically remove links connected to the node.
+// Callers (e.g., UI layer) should unlink all connected edges first,
+// then call RemoveNode. If links remain, Validate/Execute will report errors.
 func (p *Pipeline) RemoveNode(name string) error {
 	p.rwm.Lock()
 	defer p.rwm.Unlock()
@@ -149,25 +148,44 @@ func (p *Pipeline) getLink(path string) (*Link, error) {
 	return nil, fmt.Errorf("link \"%s\" is not found", path)
 }
 
+// Validate is used to check the pipeline's integrity before execution.
 func (p *Pipeline) Validate() error {
+	// check the required input slots are all linked
+
+	// check the output slots are all linked
+
+	// check the links are valid
+
+	// check has the ring with Kahn
+
 	return nil
 }
 
+// Execute is used to run the pipeline with the given options.
+// The pipeline must pass validation before execution begins.
+// Nodes are executed concurrently in topological order; a node starts
+// when all its input channels have data available.
 func (p *Pipeline) Execute(opts *Options) error {
+	err := p.Validate()
+	if err != nil {
+		return err
+	}
 	if opts == nil {
 		opts = &Options{}
 	}
 	return nil
 }
 
+// Interrupt is used to signal the pipeline to stop execution.
+// It cancels the execution context, causing all nodes to receive a cancellation signal.
+// Returns immediately; nodes should respect context cancellation for graceful shutdown.
 func (p *Pipeline) Interrupt() error {
 	return nil
 }
 
+// Close is used to release all resources held by the pipeline.
+// It calls Close on every registered node and clears the internal state.
+// After Close, the pipeline should not be reused.
 func (p *Pipeline) Close() error {
 	return nil
-}
-
-func buildLinkPath(srcNode, srcSlot, dstNode, dstSlot string) string {
-	return fmt.Sprintf("[%s.%s] -> [%s.%s]", srcNode, srcSlot, dstNode, dstSlot)
 }
