@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -21,11 +22,7 @@ type Options struct {
 type Pipeline struct {
 	nodes map[string]Node
 	links map[string]*Link
-
-	// logger counter for create context
-	counter int64
-
-	rwm sync.RWMutex
+	rwm   sync.RWMutex
 }
 
 // NewPipeline is used to create a new empty Pipeline instance.
@@ -150,13 +147,68 @@ func (p *Pipeline) getLink(path string) (*Link, error) {
 
 // Validate is used to check the pipeline's integrity before execution.
 func (p *Pipeline) Validate() error {
+	p.rwm.RLock()
+	defer p.rwm.RUnlock()
+	if len(p.nodes) == 0 {
+		return nil
+	}
 	// check the required input slots are all linked
-
+	err := p.checkInputSlots()
+	if err != nil {
+		return err
+	}
 	// check the output slots are all linked
-
+	err = p.checkOutputSlots()
+	if err != nil {
+		return err
+	}
 	// check the links are valid
 
 	// check has the ring with Kahn
+
+	return nil
+}
+
+func (p *Pipeline) checkInputSlots() error {
+	linked := make(map[string]struct{})
+	for _, link := range p.links {
+		key := link.dstNode.Name() + "." + link.dstSlot.Name
+		linked[key] = struct{}{}
+	}
+	for _, node := range p.nodes {
+		for _, slot := range node.Inputs() {
+			if !slot.Required {
+				continue
+			}
+			nodeName := node.Name()
+			slotName := slot.Name
+			key := nodeName + "." + slotName
+			if _, ok := linked[key]; !ok {
+				format := "required input slot not linked: %s.%s"
+				return fmt.Errorf(format, nodeName, slotName)
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Pipeline) checkOutputSlots() error {
+	linked := make(map[string]struct{})
+	for _, link := range p.links {
+		key := link.srcNode.Name() + "." + link.srcSlot.Name
+		linked[key] = struct{}{}
+	}
+	for _, node := range p.nodes {
+		for _, slot := range node.Outputs() {
+			nodeName := node.Name()
+			slotName := slot.Name
+			key := nodeName + "." + slotName
+			if _, ok := linked[key]; !ok {
+				format := "output slot not linked: %s.%s"
+				return fmt.Errorf(format, nodeName, slotName)
+			}
+		}
+	}
 
 	return nil
 }
@@ -165,27 +217,37 @@ func (p *Pipeline) Validate() error {
 // The pipeline must pass validation before execution begins.
 // Nodes are executed concurrently in topological order; a node starts
 // when all its input channels have data available.
-func (p *Pipeline) Execute(opts *Options) error {
+func (p *Pipeline) Execute(ctx context.Context, opts *Options) (*Context, error) {
 	err := p.Validate()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if opts == nil {
 		opts = &Options{}
 	}
-	return nil
-}
+	p.rwm.RLock()
+	defer p.rwm.RUnlock()
+	pCtx, err := p.newContext(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
 
-// Interrupt is used to signal the pipeline to stop execution.
-// It cancels the execution context, causing all nodes to receive a cancellation signal.
-// Returns immediately; nodes should respect context cancellation for graceful shutdown.
-func (p *Pipeline) Interrupt() error {
-	return nil
+	return pCtx, nil
 }
 
 // Close is used to release all resources held by the pipeline.
 // It calls Close on every registered node and clears the internal state.
 // After Close, the pipeline should not be reused.
 func (p *Pipeline) Close() error {
+	p.rwm.Lock()
+	defer p.rwm.Unlock()
+	for _, node := range p.nodes {
+		err := node.Close()
+		if err != nil {
+			return err
+		}
+	}
+	p.nodes = make(map[string]Node)
+	p.links = make(map[string]*Link)
 	return nil
 }
