@@ -163,9 +163,15 @@ func (p *Pipeline) Validate() error {
 		return err
 	}
 	// check the links are valid
-
+	err = p.checkLinksValid()
+	if err != nil {
+		return err
+	}
 	// check has the ring with Kahn
-
+	err = p.checkNoCycle()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -209,7 +215,96 @@ func (p *Pipeline) checkOutputSlots() error {
 			}
 		}
 	}
+	return nil
+}
 
+// checkLinksValid is used to verify every link references existing nodes
+// and slots, that source and destination are not the same node, and that
+// no input slot is connected to more than one output slot.
+func (p *Pipeline) checkLinksValid() error {
+	dstSeen := make(map[string]struct{})
+	for _, link := range p.links {
+		srcName := link.srcNode.Name()
+		dstName := link.dstNode.Name()
+		// source node must exist
+		if _, ok := p.nodes[srcName]; !ok {
+			return fmt.Errorf("link references unknown source node: %s", srcName)
+		}
+		// destination node must exist
+		if _, ok := p.nodes[dstName]; !ok {
+			return fmt.Errorf("link references unknown destination node: %s", dstName)
+		}
+		// self-link is not allowed
+		if srcName == dstName {
+			return fmt.Errorf("self-link is not allowed: %s", link.path)
+		}
+		// source slot must still exist on the node
+		if _, err := getNodeOutputSlot(link.srcNode, link.srcSlot.Name); err != nil {
+			return fmt.Errorf("link %s: %s", link.path, err)
+		}
+		// destination slot must still exist on the node
+		if _, err := getNodeInputSlot(link.dstNode, link.dstSlot.Name); err != nil {
+			return fmt.Errorf("link %s: %s", link.path, err)
+		}
+		// each input slot can only be connected to one output slot
+		dstKey := dstName + "." + link.dstSlot.Name
+		if _, ok := dstSeen[dstKey]; ok {
+			return fmt.Errorf("input slot %s is linked more than once", dstKey)
+		}
+		dstSeen[dstKey] = struct{}{}
+	}
+	return nil
+}
+
+// checkNoCycle use Kahn's algorithm to detect cycles in the pipeline graph.
+// It builds an adjacency list of node names, computes in-degrees, and performs
+// a topological traversal. If not all nodes can be traversed, a cycle exists.
+func (p *Pipeline) checkNoCycle() error {
+	if len(p.links) == 0 {
+		return nil
+	}
+	// collect unique node names that appear in links
+	inDegree := make(map[string]int)
+	adj := make(map[string]map[string]struct{})
+	for _, link := range p.links {
+		src := link.srcNode.Name()
+		dst := link.dstNode.Name()
+		if _, ok := inDegree[src]; !ok {
+			inDegree[src] = 0
+			adj[src] = make(map[string]struct{})
+		}
+		if _, ok := inDegree[dst]; !ok {
+			inDegree[dst] = 0
+			adj[dst] = make(map[string]struct{})
+		}
+		if _, ok := adj[src][dst]; !ok {
+			adj[src][dst] = struct{}{}
+			inDegree[dst]++
+		}
+	}
+	// seed queue with nodes having in-degree 0
+	var queue []string
+	for name, deg := range inDegree {
+		if deg == 0 {
+			queue = append(queue, name)
+		}
+	}
+	// BFS traversal
+	visited := 0
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		visited++
+		for neighbor := range adj[node] {
+			inDegree[neighbor]--
+			if inDegree[neighbor] == 0 {
+				queue = append(queue, neighbor)
+			}
+		}
+	}
+	if visited != len(inDegree) {
+		return errors.New("cycle detected in the pipeline")
+	}
 	return nil
 }
 
