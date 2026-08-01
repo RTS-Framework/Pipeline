@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -197,4 +198,85 @@ func TestLink(t *testing.T) {
 		err = pipeline.Close()
 		require.NoError(t, err)
 	})
+}
+
+func TestUnlink(t *testing.T) {
+	t.Run("common", func(t *testing.T) {
+		pipeline := NewPipeline()
+
+		nodeA := testNewTestNode("A")
+		nodeA.outputs = []*OutputSlot{
+			{Name: "out", Type: testTypeA},
+		}
+		nodeB := testNewTestNode("B")
+		nodeB.inputs = []*InputSlot{
+			{Name: "in", Accepted: []ArtifactType{testTypeA}},
+		}
+
+		err := pipeline.AddNode(nodeA)
+		require.NoError(t, err)
+		err = pipeline.AddNode(nodeB)
+		require.NoError(t, err)
+
+		err = pipeline.Link("A", "out", "B", "in")
+		require.NoError(t, err)
+		err = pipeline.Unlink("A", "out", "B", "in")
+		require.NoError(t, err)
+
+		err = pipeline.Close()
+		require.NoError(t, err)
+	})
+
+	t.Run("link not found", func(t *testing.T) {
+		pipeline := NewPipeline()
+
+		nodeA := testNewTestNode("A")
+		nodeA.outputs = []*OutputSlot{
+			{Name: "out", Type: testTypeA},
+		}
+		nodeB := testNewTestNode("B")
+		nodeB.inputs = []*InputSlot{
+			{Name: "in", Accepted: []ArtifactType{testTypeA}},
+		}
+
+		err := pipeline.AddNode(nodeA)
+		require.NoError(t, err)
+		err = pipeline.AddNode(nodeB)
+		require.NoError(t, err)
+
+		err = pipeline.Unlink("A", "out", "B", "in")
+		require.ErrorContains(t, err, "not found")
+
+		err = pipeline.Close()
+		require.NoError(t, err)
+	})
+}
+
+func TestLink_String(t *testing.T) {
+	pipeline := NewPipeline()
+
+	nodeA := testNewTestNode("A")
+	nodeA.outputs = []*OutputSlot{
+		{Name: "out", Type: testTypeA},
+	}
+
+	nodeB := testNewTestNode("B")
+	nodeB.inputs = []*InputSlot{
+		{Name: "in", Accepted: []ArtifactType{testTypeA}},
+	}
+
+	err := pipeline.AddNode(nodeA)
+	require.NoError(t, err)
+	err = pipeline.AddNode(nodeB)
+	require.NoError(t, err)
+
+	err = pipeline.Link("A", "out", "B", "in")
+	require.NoError(t, err)
+
+	for _, link := range pipeline.Links() {
+		fmt.Println(link)
+	}
+
+	err = pipeline.Close()
+	require.NoError(t, err)
 }
