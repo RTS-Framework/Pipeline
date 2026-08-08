@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
+	"sort"
 	"sync"
 )
 
@@ -57,13 +59,13 @@ func (p *Pipeline) AddNode(node Node) error {
 	return nil
 }
 
-// RemoveNode is used to remove a node from the pipeline by its name.
+// DeleteNode is used to remove a node from the pipeline by its name.
 // The node's Close method is called to release held resources.
 //
 // Note: This does not automatically remove links connected to the node.
 // Callers (e.g., UI layer) should unlink all connected edges first,
-// then call RemoveNode. If links remain, Validate/Execute will report errors.
-func (p *Pipeline) RemoveNode(name string) error {
+// then call DeleteNode. If links remain, Validate/Execute will report errors.
+func (p *Pipeline) DeleteNode(name string) error {
 	p.rwm.Lock()
 	defer p.rwm.Unlock()
 	node, err := p.getNode(name)
@@ -145,10 +147,36 @@ func (p *Pipeline) getLink(path string) (*Link, error) {
 	return nil, fmt.Errorf("link \"%s\" is not found", path)
 }
 
+// Nodes is used to get all nodes.
+func (p *Pipeline) Nodes() []Node {
+	p.rwm.RLock()
+	defer p.rwm.RUnlock()
+	nodes := make([]Node, 0, len(p.nodes))
+	for _, node := range p.nodes {
+		nodes = append(nodes, node)
+	}
+	return nodes
+}
+
+// Links is used to get all links.
+func (p *Pipeline) Links() []*Link {
+	p.rwm.RLock()
+	defer p.rwm.RUnlock()
+	links := make([]*Link, 0, len(p.links))
+	for _, link := range p.links {
+		links = append(links, link)
+	}
+	return links
+}
+
 // Validate is used to check the pipeline's integrity before execution.
 func (p *Pipeline) Validate() error {
 	p.rwm.RLock()
 	defer p.rwm.RUnlock()
+	return p.validate()
+}
+
+func (p *Pipeline) validate() error {
 	if len(p.nodes) == 0 {
 		return nil
 	}
@@ -226,6 +254,10 @@ func (p *Pipeline) checkLinksValid() error {
 	for _, link := range p.links {
 		srcName := link.srcNode.Name()
 		dstName := link.dstNode.Name()
+		// self-link is not allowed
+		if srcName == dstName {
+			return fmt.Errorf("self-link is not allowed: %s", link.path)
+		}
 		// source node must exist
 		if _, ok := p.nodes[srcName]; !ok {
 			return fmt.Errorf("link references unknown source node: %s", srcName)
@@ -233,10 +265,6 @@ func (p *Pipeline) checkLinksValid() error {
 		// destination node must exist
 		if _, ok := p.nodes[dstName]; !ok {
 			return fmt.Errorf("link references unknown destination node: %s", dstName)
-		}
-		// self-link is not allowed
-		if srcName == dstName {
-			return fmt.Errorf("self-link is not allowed: %s", link.path)
 		}
 		// source slot must still exist on the node
 		if _, err := getNodeOutputSlot(link.srcNode, link.srcSlot.Name); err != nil {
@@ -310,24 +338,127 @@ func (p *Pipeline) checkNoCycle() error {
 
 // Execute is used to run the pipeline with the given options.
 // The pipeline must pass validation before execution begins.
-// Nodes are executed concurrently in topological order; a node starts
-// when all its input channels have data available.
+// Nodes are executed concurrently in topological order;
+// a node starts when all its input channels have data available.
 func (p *Pipeline) Execute(ctx context.Context, opts *Options) (*Context, error) {
-	err := p.Validate()
-	if err != nil {
-		return nil, err
-	}
 	if opts == nil {
 		opts = &Options{}
 	}
 	p.rwm.RLock()
 	defer p.rwm.RUnlock()
+	err := p.validate()
+	if err != nil {
+		return nil, err
+	}
 	pCtx, err := p.newContext(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
+	nodes := make(map[string]Node, len(p.nodes))
+	for name, node := range p.nodes {
+		nodes[name] = node
+	}
+	err = p.runNodes(pCtx, nodes, opts)
+	return pCtx, err
+}
 
-	return pCtx, nil
+// runNodes starts every node concurrently and waits for all of them.
+//
+// The framework does not enforce ordering: nodes must follow the node
+// contract (read inputs through ctx.ReadInput, write every linked
+// output slot through ctx.WriteOutput). When any node fails, the
+// context is canceled so compliant nodes can abort their blocking reads.
+func (p *Pipeline) runNodes(pCtx *Context, nodes map[string]Node, opts *Options) error {
+	if e := pCtx.Err(); e != nil {
+		return fmt.Errorf("pipeline canceled: %w", e)
+	}
+
+	names := make([]string, 0, len(nodes))
+	for name := range nodes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var wg sync.WaitGroup
+	for _, name := range names {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+
+			node := nodes[name]
+			err := p.executeNode(pCtx, node, opts)
+
+			pCtx.nodesMu.Lock()
+			pCtx.nodesErr[name] = err
+			close(pCtx.nodesDone[name])
+			pCtx.nodesMu.Unlock()
+
+			if err != nil {
+				// Fail fast: let every compliant node abort via ctx.Done.
+				pCtx.Interrupt()
+			}
+		}(name)
+	}
+
+	wg.Wait()
+
+	// Aggregate all failures.
+	var errs []error
+	pCtx.nodesMu.Lock()
+	for _, name := range names {
+		if e := pCtx.nodesErr[name]; e != nil {
+			errs = append(errs, fmt.Errorf("node %q: %w", name, e))
+		}
+	}
+	pCtx.nodesMu.Unlock()
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	if e := pCtx.Err(); e != nil {
+		return fmt.Errorf("pipeline canceled: %w", e)
+	}
+	return nil
+}
+
+// executeNode runs one node with surrounding hooks, panic recovery and
+// output integrity checking. AfterNodeExecute always runs, even when
+// the node's Execute panics.
+func (p *Pipeline) executeNode(pCtx *Context, node Node, opts *Options) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.Join(err,
+				fmt.Errorf("node %q panic: %v\n%s", node.Name(), r, debug.Stack()))
+		}
+	}()
+
+	if opts.BeforeNodeExecute != nil {
+		if e := opts.BeforeNodeExecute(node); e != nil {
+			return errors.Join(err,
+				fmt.Errorf("BeforeNodeExecute(%q): %w", node.Name(), e))
+		}
+	}
+
+	if opts.AfterNodeExecute != nil {
+		defer func() {
+			if e := opts.AfterNodeExecute(node); e != nil {
+				err = errors.Join(err,
+					fmt.Errorf("AfterNodeExecute(%q): %w", node.Name(), e))
+			}
+		}()
+	}
+
+	err = node.Execute(pCtx)
+	// Output integrity check: a node that returns success while the
+	// pipeline is still healthy must have written every linked output
+	// slot. Skip the check when the context was canceled, so a node that
+	// aborted on cancellation is not falsely blamed for a missing write.
+	if err == nil && pCtx.Err() == nil {
+		if e := pCtx.checkOutputsWritten(node); e != nil {
+			err = e
+		}
+	}
+	return err
 }
 
 // Close is used to release all resources held by the pipeline.
