@@ -3,12 +3,16 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// logger counter for create context
+var logIDCounter int64
 
 // Context is a Pipeline execute context, it is a mirror state of Pipeline.
 type Context struct {
@@ -20,6 +24,7 @@ type Context struct {
 	inputIndex  map[string]<-chan *Artifact
 	outputIndex map[string][]chan<- *Artifact
 
+	// key is the node name
 	limitGetInput  map[string]struct{}
 	limitGetOutput map[string]struct{}
 	limitGetMu     sync.Mutex
@@ -37,7 +42,7 @@ func (p *Pipeline) newContext(ctx context.Context, opts *Options) (*Context, err
 	// prepare the logger if opts.Logger is nil
 	logger := opts.Logger
 	if logger == nil {
-		logID := atomic.AddInt64(&p.counter, 1)
+		logID := atomic.AddInt64(&logIDCounter, 1)
 		logName := fmt.Sprintf("pipeline-%d-%04d.log", time.Now().UnixNano(), logID)
 		logPath := filepath.Join("logs", logName)
 		err := os.MkdirAll("logs", 0750)
@@ -48,7 +53,7 @@ func (p *Pipeline) newContext(ctx context.Context, opts *Options) (*Context, err
 		if err != nil {
 			return nil, err
 		}
-		logger = NewLogger(file)
+		logger = NewLogger(io.MultiWriter(os.Stdout, file))
 	}
 	// create channel for each link
 	linkChs := make(map[string]chan *Artifact, len(p.links))
@@ -89,7 +94,7 @@ func (p *Pipeline) newContext(ctx context.Context, opts *Options) (*Context, err
 func (ctx *Context) GetInput(node Node) map[string]<-chan *Artifact {
 	name := node.Name()
 	if ctx.alreadyGetInput(name) {
-		panic("GetInput can only be called once")
+		panic("Context.GetInput can only be called once")
 	}
 	slots := node.Inputs()
 	channels := make(map[string]<-chan *Artifact)
@@ -120,7 +125,7 @@ func (ctx *Context) alreadyGetInput(name string) bool {
 func (ctx *Context) GetOutput(node Node) map[string]chan<- *Artifact {
 	name := node.Name()
 	if ctx.alreadyGetOutput(name) {
-		panic("GetOutput can only be called once")
+		panic("Context.GetOutput can only be called once")
 	}
 	slots := node.Outputs()
 	channels := make(map[string]chan<- *Artifact)
