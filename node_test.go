@@ -82,9 +82,9 @@ func TestCheckNode(t *testing.T) {
 	t.Run("unique inputs", func(t *testing.T) {
 		node := testNewTestNode("n")
 		node.inputs = []*InputSlot{
-			{Name: "alpha"},
-			{Name: "beta"},
-			{Name: "gamma"},
+			{Name: "a"},
+			{Name: "b"},
+			{Name: "c"},
 		}
 
 		err := CheckNode(node)
@@ -132,8 +132,8 @@ func TestCheckNode(t *testing.T) {
 	t.Run("outputs only", func(t *testing.T) {
 		node := testNewTestNode("n")
 		node.outputs = []*OutputSlot{
-			{Name: "x"},
-			{Name: "y"},
+			{Name: "a"},
+			{Name: "b"},
 		}
 
 		err := CheckNode(node)
@@ -182,9 +182,9 @@ func TestCheckNode(t *testing.T) {
 	t.Run("duplicate output among many", func(t *testing.T) {
 		node := testNewTestNode("n")
 		node.outputs = []*OutputSlot{
-			{Name: "x"},
-			{Name: "y"},
-			{Name: "x"},
+			{Name: "a"},
+			{Name: "b"},
+			{Name: "a"},
 		}
 
 		err := CheckNode(node)
@@ -220,5 +220,55 @@ func TestCheckNode(t *testing.T) {
 		require.Error(t, err)
 		require.ErrorContains(t, err, "duplicate input slot name")
 		require.ErrorContains(t, err, "same")
+	})
+}
+
+func TestGetNodeInputSlot(t *testing.T) {
+	t.Run("found", func(t *testing.T) {
+		node := testNewTestNode("n")
+		node.inputs = []*InputSlot{
+			{Name: "a"},
+			{Name: "b"},
+		}
+
+		slot, err := getNodeInputSlot(node, "a")
+		require.NoError(t, err)
+		require.Equal(t, "a", slot.Name)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		node := testNewTestNode("n")
+		node.inputs = []*InputSlot{
+			{Name: "a"},
+		}
+
+		slot, err := getNodeInputSlot(node, "miss")
+		require.ErrorContains(t, err, "not found")
+		require.Nil(t, slot)
+	})
+}
+
+func TestGetNodeOutputSlot(t *testing.T) {
+	t.Run("found", func(t *testing.T) {
+		node := testNewTestNode("n")
+		node.outputs = []*OutputSlot{
+			{Name: "a"},
+			{Name: "b"},
+		}
+
+		slot, err := getNodeOutputSlot(node, "a")
+		require.NoError(t, err)
+		require.Equal(t, "a", slot.Name)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		node := testNewTestNode("n")
+		node.outputs = []*OutputSlot{
+			{Name: "a"},
+		}
+
+		slot, err := getNodeOutputSlot(node, "miss")
+		require.ErrorContains(t, err, "not found")
+		require.Nil(t, slot)
 	})
 }
