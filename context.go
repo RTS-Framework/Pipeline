@@ -3,9 +3,9 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,10 +24,11 @@ type Context struct {
 	inputIndex  map[string]<-chan *Artifact
 	outputIndex map[string][]chan<- *Artifact
 
-	// key is the node name
-	limitGetInput  map[string]struct{}
-	limitGetOutput map[string]struct{}
-	limitGetMu     sync.Mutex
+	// exactly-once access tracking for slots
+	// key is "nodeName.slotName"
+	inputRead   map[string]bool
+	outputWrote map[string]bool
+	slotMu      sync.Mutex
 
 	// node running status
 	// key is node name
@@ -53,7 +54,7 @@ func (p *Pipeline) newContext(ctx context.Context, opts *Options) (*Context, err
 		if err != nil {
 			return nil, err
 		}
-		logger = NewLogger(io.MultiWriter(os.Stdout, file))
+		logger = NewLogger(file)
 	}
 	// create channel for each link
 	linkChs := make(map[string]chan *Artifact, len(p.links))
@@ -76,95 +77,125 @@ func (p *Pipeline) newContext(ctx context.Context, opts *Options) (*Context, err
 		nodesDone[name] = make(chan struct{})
 	}
 	c := &Context{
-		logger:         logger,
-		limitGetInput:  make(map[string]struct{}),
-		limitGetOutput: make(map[string]struct{}),
-		inputIndex:     inputIndex,
-		outputIndex:    outputIndex,
-		nodesDone:      nodesDone,
-		nodesErr:       make(map[string]error),
+		logger:      logger,
+		inputIndex:  inputIndex,
+		outputIndex: outputIndex,
+		inputRead:   make(map[string]bool),
+		outputWrote: make(map[string]bool),
+		nodesDone:   nodesDone,
+		nodesErr:    make(map[string]error),
 	}
 	c.Context, c.cancel = context.WithCancel(ctx)
 	return c, nil
 }
 
-// GetInput is used to get input channels by Node.
-// returned map's key is the input slot name.
-// this method can only call once by each Node.
-func (ctx *Context) GetInput(node Node) map[string]<-chan *Artifact {
-	name := node.Name()
-	if ctx.alreadyGetInput(name) {
-		panic("Context.GetInput can only be called once")
+// ReadInput reads one Artifact from the node's input slot.
+//
+// An optional slot that is not linked returns (nil, nil); the node
+// should treat it as "no data" and skip. Each input slot can be read at
+// most once per execution; reading it again returns an error.
+func (ctx *Context) ReadInput(node Node, slotName string) (*Artifact, error) {
+	if _, err := getNodeInputSlot(node, slotName); err != nil {
+		return nil, err
 	}
-	slots := node.Inputs()
-	channels := make(map[string]<-chan *Artifact)
-	for _, slot := range slots {
-		key := name + "." + slot.Name
-		ch := ctx.inputIndex[key]
-		if ch == nil {
-			panic(fmt.Sprintf("invalid node implement: \"%s\"", name))
+	key := node.Name() + "." + slotName
+
+	ctx.slotMu.Lock()
+	if ctx.inputRead[key] {
+		ctx.slotMu.Unlock()
+		return nil, fmt.Errorf("input slot %s already read", key)
+	}
+	ctx.inputRead[key] = true
+	ctx.slotMu.Unlock()
+
+	ch := ctx.inputIndex[key]
+	if ch == nil {
+		// optional slot without link: no data
+		return nil, nil
+	}
+	select {
+	case art := <-ch:
+		return art, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// WriteOutput writes one Artifact to the node's output slot and clones
+// it to every linked input slot.
+//
+// Each output slot must be written exactly once; writing it again
+// returns an error. WriteOutput returns only after every linked channel
+// has accepted the artifact, or the context is canceled.
+func (ctx *Context) WriteOutput(node Node, slotName string, art *Artifact) error {
+	if _, err := getNodeOutputSlot(node, slotName); err != nil {
+		return err
+	}
+	key := node.Name() + "." + slotName
+
+	ctx.slotMu.Lock()
+	if ctx.outputWrote[key] {
+		ctx.slotMu.Unlock()
+		return fmt.Errorf("output slot %s already written", key)
+	}
+	ctx.outputWrote[key] = true
+	ctx.slotMu.Unlock()
+
+	chs := ctx.outputIndex[key]
+	if chs == nil {
+		return fmt.Errorf("output slot %s is not linked", key)
+	}
+	for _, ch := range chs {
+		select {
+		case ch <- art.Clone():
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		channels[slot.Name] = ch
 	}
-	return channels
+	return nil
 }
 
-func (ctx *Context) alreadyGetInput(name string) bool {
-	ctx.limitGetMu.Lock()
-	defer ctx.limitGetMu.Unlock()
-	if _, ok := ctx.limitGetInput[name]; ok {
-		return true
-	}
-	ctx.limitGetInput[name] = struct{}{}
-	return false
-}
-
-// GetOutput is used to get output channels by Node.
-// returned map's key is the output slot name.
-// this method can only call once by each Node.
-func (ctx *Context) GetOutput(node Node) map[string]chan<- *Artifact {
-	name := node.Name()
-	if ctx.alreadyGetOutput(name) {
-		panic("Context.GetOutput can only be called once")
-	}
-	slots := node.Outputs()
-	channels := make(map[string]chan<- *Artifact)
-	for _, slot := range slots {
-		key := name + "." + slot.Name
-		chs := ctx.outputIndex[key]
-		if chs == nil {
-			panic(fmt.Sprintf("invalid node implement: \"%s\"", name))
+// checkOutputsWritten verifies that a node that completed successfully
+// wrote exactly one Artifact to every linked output slot.
+func (ctx *Context) checkOutputsWritten(node Node) error {
+	var missing []string
+	for _, slot := range node.Outputs() {
+		key := node.Name() + "." + slot.Name
+		if _, linked := ctx.outputIndex[key]; !linked {
+			// Validate already rejects unlinked outputs; defensive only.
+			continue
 		}
-		// Node only write Artifact to channel once
-		proxy := make(chan *Artifact)
-		go func() {
-			var art *Artifact
-			select {
-			case art = <-proxy:
-			case <-ctx.Context.Done():
-				return
-			}
-			for _, ch := range chs {
-				select {
-				case ch <- art.Clone():
-				case <-ctx.Context.Done():
-					return
-				}
-			}
-		}()
-		channels[slot.Name] = proxy
+		ctx.slotMu.Lock()
+		wrote := ctx.outputWrote[key]
+		ctx.slotMu.Unlock()
+		if !wrote {
+			missing = append(missing, slot.Name)
+		}
 	}
-	return channels
+	if len(missing) > 0 {
+		return fmt.Errorf("node %q returned success without writing output slot(s): %s",
+			node.Name(), strings.Join(missing, ", "))
+	}
+	return nil
 }
 
-func (ctx *Context) alreadyGetOutput(name string) bool {
-	ctx.limitGetMu.Lock()
-	defer ctx.limitGetMu.Unlock()
-	if _, ok := ctx.limitGetOutput[name]; ok {
-		return true
+// NodeError returns the error recorded for a node. It returns nil for
+// nodes that succeeded.
+func (ctx *Context) NodeError(name string) error {
+	ctx.nodesMu.Lock()
+	defer ctx.nodesMu.Unlock()
+	return ctx.nodesErr[name]
+}
+
+// Errors returns a copy of the per-node error map.
+func (ctx *Context) Errors() map[string]error {
+	ctx.nodesMu.Lock()
+	defer ctx.nodesMu.Unlock()
+	out := make(map[string]error, len(ctx.nodesErr))
+	for name, e := range ctx.nodesErr {
+		out[name] = e
 	}
-	ctx.limitGetOutput[name] = struct{}{}
-	return false
+	return out
 }
 
 // Logger is used to get logger from context, if a Node want
