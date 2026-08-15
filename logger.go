@@ -52,8 +52,6 @@ type logger struct {
 func NewLogger(w io.Writer) Logger {
 	if w == nil {
 		w = os.Stdout
-	} else {
-		w = io.MultiWriter(os.Stdout, w)
 	}
 	lg := log.New(w, "", log.LstdFlags)
 	return &logger{logger: lg, level: DefaultLevel}

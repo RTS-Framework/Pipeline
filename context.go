@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,7 +55,7 @@ func (p *Pipeline) newContext(ctx context.Context, opts *Options) (*Context, err
 		if err != nil {
 			return nil, err
 		}
-		logger = NewLogger(file)
+		logger = NewLogger(io.MultiWriter(os.Stdout, file))
 	}
 	// create channel for each link
 	linkChs := make(map[string]chan *Artifact, len(p.links))
