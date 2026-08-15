@@ -3,7 +3,6 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,10 +11,21 @@ import (
 	"time"
 )
 
-// logger counter for create context
+// logIDCounter is the logger counter for creating context.
 var logIDCounter int64
 
 // Context is a Pipeline execute context, it is a mirror state of Pipeline.
+//
+// A Context is created by Pipeline.Execute and returned immediately:
+// the pipeline runs in the background, and the caller can inspect
+// per-node status, wait for completion, or interrupt the run at any
+// time. Pipeline itself only stores the static node/link graph; all
+// runtime state lives in this Context.
+//
+// Lifecycle:
+//   - Done() is closed when the whole run finishes (success or failure).
+//   - Wait() blocks until the run finishes and returns the joined error.
+//   - Interrupt() cancels the run.
 type Context struct {
 	context.Context
 
@@ -32,10 +42,16 @@ type Context struct {
 	slotMu      sync.Mutex
 
 	// node running status
-	// key is node name
+	// key is the node name
 	nodesDone map[string]chan struct{}
 	nodesErr  map[string]error
 	nodesMu   sync.Mutex
+
+	// lifecycle status
+	finished   chan struct{}
+	finishOnce sync.Once
+	resultErr  error
+	statusMu   sync.Mutex
 
 	cancel context.CancelFunc
 }
@@ -55,7 +71,7 @@ func (p *Pipeline) newContext(ctx context.Context, opts *Options) (*Context, err
 		if err != nil {
 			return nil, err
 		}
-		logger = NewLogger(io.MultiWriter(os.Stdout, file))
+		logger = NewLogger(file)
 	}
 	// create channel for each link
 	linkChs := make(map[string]chan *Artifact, len(p.links))
@@ -85,6 +101,7 @@ func (p *Pipeline) newContext(ctx context.Context, opts *Options) (*Context, err
 		outputWrote: make(map[string]bool),
 		nodesDone:   nodesDone,
 		nodesErr:    make(map[string]error),
+		finished:    make(chan struct{}),
 	}
 	c.Context, c.cancel = context.WithCancel(ctx)
 	return c, nil
@@ -178,6 +195,74 @@ func (ctx *Context) checkOutputsWritten(node Node) error {
 			node.Name(), strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+// setNodeResult records the result of a finished node and closes its
+// done channel. It is called by the execution runner.
+func (ctx *Context) setNodeResult(name string, err error) {
+	ctx.nodesMu.Lock()
+	defer ctx.nodesMu.Unlock()
+	ctx.nodesErr[name] = err
+	close(ctx.nodesDone[name])
+}
+
+// finish records the final pipeline result and closes Done(). It is
+// called by the execution runner.
+func (ctx *Context) finish(err error) {
+	ctx.statusMu.Lock()
+	ctx.resultErr = err
+	ctx.statusMu.Unlock()
+	ctx.finishOnce.Do(func() {
+		close(ctx.finished)
+	})
+}
+
+// Done returns a channel that is closed when the whole pipeline run
+// finishes (success or failure).
+//
+// This is different from the embedded context.Context.Done, which only
+// fires on cancellation.
+func (ctx *Context) Done() <-chan struct{} {
+	return ctx.finished
+}
+
+// Wait blocks until the pipeline run finishes and returns the joined
+// error: nil on success, a joined node error on failure, or a
+// cancellation error.
+func (ctx *Context) Wait() error {
+	<-ctx.finished
+	ctx.statusMu.Lock()
+	defer ctx.statusMu.Unlock()
+	return ctx.resultErr
+}
+
+// Err returns the current result error without blocking. It returns nil
+// while the run is still in progress or has succeeded.
+func (ctx *Context) Err() error {
+	ctx.statusMu.Lock()
+	defer ctx.statusMu.Unlock()
+	return ctx.resultErr
+}
+
+// Running reports whether the pipeline run is still in progress.
+func (ctx *Context) Running() bool {
+	select {
+	case <-ctx.finished:
+		return false
+	default:
+		return true
+	}
+}
+
+// NodeDone returns the channel that is closed when the node finishes.
+func (ctx *Context) NodeDone(name string) (<-chan struct{}, error) {
+	ctx.nodesMu.Lock()
+	defer ctx.nodesMu.Unlock()
+	ch, ok := ctx.nodesDone[name]
+	if !ok {
+		return nil, fmt.Errorf("node %q is not found", name)
+	}
+	return ch, nil
 }
 
 // NodeError returns the error recorded for a node. It returns nil for
