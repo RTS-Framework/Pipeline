@@ -4,9 +4,30 @@ import (
 	"fmt"
 )
 
-// Node is the processing unit of a Pipeline. Each Node declares its input/output
-// Slots and implements the execution logic that transforms input Artifacts into
-// output Artifacts.
+// Node is the processing unit of a Pipeline. Each Node declares its
+// input/output Slots and implements the execution logic that transforms
+// input Artifacts into output Artifacts.
+//
+// Runtime contract (violations are reported as node errors):
+//
+//   - All nodes of one Execute start at the same time; never assume an
+//     execution order between nodes.
+//
+//   - Read every input slot through ctx.ReadInput exactly once. An
+//     optional slot that is not linked returns (nil, nil) and must be
+//     skipped; a second read is an error.
+//
+//   - Write every linked output slot through ctx.WriteOutput exactly
+//     once before returning nil. Missing or duplicate writes are
+//     reported as node errors.
+//
+//   - Blocking reads must select on ctx.Done() so a failed node does
+//     not leave other nodes waiting forever. ctx.ReadInput already
+//     handles cancellation internally.
+//
+//   - Node.Execute must be safe for concurrent use by multiple
+//     goroutines and must be reentrant: the same instance can be
+//     executed by multiple Pipeline.Execute calls.
 type Node interface {
 	// Name returns a unique identifier for this Node within the Pipeline.
 	Name() string
