@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
-	"sort"
 	"sync"
 )
 
@@ -59,13 +58,13 @@ func (p *Pipeline) AddNode(node Node) error {
 	return nil
 }
 
-// DeleteNode is used to remove a node from the pipeline by its name.
+// RemoveNode is used to remove a node from the pipeline by its name.
 // The node's Close method is called to release held resources.
 //
 // Note: This does not automatically remove links connected to the node.
 // Callers (e.g., UI layer) should unlink all connected edges first,
-// then call DeleteNode. If links remain, Validate/Execute will report errors.
-func (p *Pipeline) DeleteNode(name string) error {
+// then call RemoveNode. If links remain, Validate/Execute will report errors.
+func (p *Pipeline) RemoveNode(name string) error {
 	p.rwm.Lock()
 	defer p.rwm.Unlock()
 	node, err := p.getNode(name)
@@ -203,6 +202,9 @@ func (p *Pipeline) validate() error {
 	return nil
 }
 
+// checkInputSlots verifies that every required input slot is linked.
+// Optional input slots may stay unlinked; at runtime ReadInput returns
+// (nil, nil) for them and the Node must skip them.
 func (p *Pipeline) checkInputSlots() error {
 	linked := make(map[string]struct{})
 	for _, link := range p.links {
@@ -336,30 +338,67 @@ func (p *Pipeline) checkNoCycle() error {
 	return nil
 }
 
-// Execute is used to run the pipeline with the given options.
-// The pipeline must pass validation before execution begins.
-// Nodes are executed concurrently in topological order;
-// a node starts when all its input channels have data available.
+// Execute validates the pipeline, builds a run Context and starts the
+// run in the background, then returns immediately.
+//
+// Only one execution is allowed at a time: calling Execute again while
+// a run is in progress returns an error.
+//
+// Use the returned Context to inspect node status (Nodes / NodeDone /
+// NodeError / Errors), wait for completion (Wait), or interrupt the run
+// (Interrupt). Run is the synchronous convenience wrapper of Execute +
+// Wait.
 func (p *Pipeline) Execute(ctx context.Context, opts *Options) (*Context, error) {
 	if opts == nil {
 		opts = &Options{}
 	}
+
+	if !p.runMu.TryLock() {
+		return nil, errors.New("pipeline is already running")
+	}
+
+	// Validate and snapshot the graph under one read lock, then release
+	// it before executing. Node code can call Pipeline methods during
+	// Execute without deadlocking.
 	p.rwm.RLock()
-	defer p.rwm.RUnlock()
-	err := p.validate()
-	if err != nil {
+	if err := p.validate(); err != nil {
+		p.rwm.RUnlock()
+		p.runMu.Unlock()
 		return nil, err
 	}
 	pCtx, err := p.newContext(ctx, opts)
 	if err != nil {
+		p.rwm.RUnlock()
+		p.runMu.Unlock()
 		return nil, err
 	}
 	nodes := make(map[string]Node, len(p.nodes))
 	for name, node := range p.nodes {
 		nodes[name] = node
 	}
-	err = p.runNodes(pCtx, nodes, opts)
-	return pCtx, err
+	p.rwm.RUnlock()
+
+	go func() {
+		defer p.runMu.Unlock()
+		p.run(pCtx, nodes, opts)
+	}()
+	return pCtx, nil
+}
+
+// Run is the synchronous form of Execute: it starts the pipeline and
+// blocks until the run finishes.
+func (p *Pipeline) Run(ctx context.Context, opts *Options) error {
+	pCtx, err := p.Execute(ctx, opts)
+	if err != nil {
+		return err
+	}
+	return pCtx.Wait()
+}
+
+// run executes the background run and records the final result into
+// the Context.
+func (p *Pipeline) run(pCtx *Context, nodes map[string]Node, opts *Options) {
+	pCtx.finish(p.runNodes(pCtx, nodes, opts))
 }
 
 // runNodes starts every node concurrently and waits for all of them.
@@ -373,11 +412,7 @@ func (p *Pipeline) runNodes(pCtx *Context, nodes map[string]Node, opts *Options)
 		return fmt.Errorf("pipeline canceled: %w", e)
 	}
 
-	names := make([]string, 0, len(nodes))
-	for name := range nodes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := pCtx.Nodes()
 
 	var wg sync.WaitGroup
 	for _, name := range names {
@@ -388,11 +423,7 @@ func (p *Pipeline) runNodes(pCtx *Context, nodes map[string]Node, opts *Options)
 			node := nodes[name]
 			err := p.executeNode(pCtx, node, opts)
 
-			pCtx.nodesMu.Lock()
-			pCtx.nodesErr[name] = err
-			close(pCtx.nodesDone[name])
-			pCtx.nodesMu.Unlock()
-
+			pCtx.setNodeResult(name, err)
 			if err != nil {
 				// Fail fast: let every compliant node abort via ctx.Done.
 				pCtx.Interrupt()
@@ -404,14 +435,11 @@ func (p *Pipeline) runNodes(pCtx *Context, nodes map[string]Node, opts *Options)
 
 	// Aggregate all failures.
 	var errs []error
-	pCtx.nodesMu.Lock()
 	for _, name := range names {
-		if e := pCtx.nodesErr[name]; e != nil {
+		if e := pCtx.NodeError(name); e != nil {
 			errs = append(errs, fmt.Errorf("node %q: %w", name, e))
 		}
 	}
-	pCtx.nodesMu.Unlock()
-
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
