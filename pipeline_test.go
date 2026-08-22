@@ -199,6 +199,76 @@ func TestPipeline_Unlink(t *testing.T) {
 	})
 }
 
+func TestPipeline_Nodes(t *testing.T) {
+	p := NewPipeline()
+	assert.Empty(t, p.Nodes())
+
+	require.NoError(t, p.AddNode(testNewTestNode("a")))
+	require.NoError(t, p.AddNode(testNewTestNode("b")))
+	nodes := p.Nodes()
+	assert.Len(t, nodes, 2)
+}
+
+func TestPipeline_Links(t *testing.T) {
+	p, _, _ := newSimplePipeline(t)
+	assert.Len(t, p.Links(), 1)
+}
+
+func TestPipeline_Validate(t *testing.T) {
+	t.Run("empty pipeline is valid", func(t *testing.T) {
+		p := NewPipeline()
+		require.NoError(t, p.Validate())
+	})
+
+	t.Run("required input not linked", func(t *testing.T) {
+		p := NewPipeline()
+		n := testNewTestNode("n")
+		n.inputs = []*InputSlot{
+			{Name: "data", Required: true, Accepted: []ArtifactType{testTypeA}},
+		}
+		require.NoError(t, p.AddNode(n))
+		err := p.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "required input")
+	})
+
+	t.Run("output not linked", func(t *testing.T) {
+		p := NewPipeline()
+		n := testNewTestNode("n")
+		n.outputs = []*OutputSlot{{Name: "out", Type: testTypeA}}
+		require.NoError(t, p.AddNode(n))
+		err := p.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unlinked output")
+	})
+
+	t.Run("cycle detected", func(t *testing.T) {
+		p := NewPipeline()
+
+		a := testNewTestNode("A")
+		a.inputs = []*InputSlot{{Name: "in", Accepted: []ArtifactType{testTypeA}}}
+		a.outputs = []*OutputSlot{{Name: "out", Type: testTypeA}}
+
+		b := testNewTestNode("B")
+		b.inputs = []*InputSlot{{Name: "in", Accepted: []ArtifactType{testTypeA}}}
+		b.outputs = []*OutputSlot{{Name: "out", Type: testTypeA}}
+
+		require.NoError(t, p.AddNode(a))
+		require.NoError(t, p.AddNode(b))
+		require.NoError(t, p.Link("A", "out", "B", "in"))
+		require.NoError(t, p.Link("B", "out", "A", "in"))
+
+		err := p.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cycle")
+	})
+
+	t.Run("valid two-node pipeline", func(t *testing.T) {
+		p, _, _ := newSimplePipeline(t)
+		require.NoError(t, p.Validate())
+	})
+}
+
 func newSimplePipeline(t *testing.T) (*Pipeline, *testNode, *testNode) {
 	t.Helper()
 	p := NewPipeline()
