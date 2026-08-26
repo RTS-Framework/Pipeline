@@ -59,7 +59,7 @@ type Node interface {
 	// Execute is used to execute the Node's processing logic.
 	// it will be called when the Pipeline Executes.
 	// it must be safe for concurrent use by multiple goroutines.
-	Execute(ctx *Context) error
+	Execute(ctx Context) error
 
 	// Close is used to release the resources held by this Node,
 	// it will be called once when this Node be removed or Pipeline Close.

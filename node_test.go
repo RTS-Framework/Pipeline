@@ -12,7 +12,7 @@ type testNode struct {
 	inputs  []*InputSlot
 	outputs []*OutputSlot
 
-	exec func(ctx *Context) error
+	exec func(ctx Context) error
 }
 
 func testNewTestNode(name string) *testNode {
@@ -47,7 +47,7 @@ func (n *testNode) Initialize() error {
 	return nil
 }
 
-func (n *testNode) Execute(ctx *Context) error {
+func (n *testNode) Execute(ctx Context) error {
 	return n.exec(ctx)
 }
 
