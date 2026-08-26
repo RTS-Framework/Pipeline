@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -47,6 +48,20 @@ type Context interface {
 	Write(node Node, slot string, art *Artifact) error
 }
 
+// Task is used to control Pipeline execute context.
+type Task interface {
+	// IsRunning is used to check current task is still running.
+	IsRunning() bool
+
+	// Wait is used to block until the pipeline run finishes and returns the
+	// joined error: nil on success, a joined node error on failure,
+	// or a cancellation error.
+	Wait() error
+
+	// Interrupt is used to interrupt current task.
+	Interrupt()
+}
+
 type pContext struct {
 	context.Context
 
@@ -71,11 +86,9 @@ type pContext struct {
 	nodesErr  map[string]error
 	nodesMu   sync.Mutex
 
-	// lifecycle status
-	finished   chan struct{}
-	finishOnce sync.Once
-	resultErr  error
-	statusMu   sync.Mutex
+	finished  chan struct{}
+	resultErr error
+	resultMu  sync.Mutex
 
 	cancel context.CancelFunc
 }
@@ -207,46 +220,6 @@ func (ctx *pContext) checkOutputsWritten(node Node) error {
 	return fmt.Errorf(format, node.Name(), strings.Join(missing, ", "))
 }
 
-// setNodeResult records the result of a finished node and closes its
-// done channel. It is called by the execution runner.
-func (ctx *pContext) setNodeResult(name string, err error) {
-	ctx.nodesMu.Lock()
-	defer ctx.nodesMu.Unlock()
-	ctx.nodesErr[name] = err
-	close(ctx.nodesDone[name])
-}
-
-// finish records the final pipeline result and closes Done(). It is
-// called by the execution runner.
-func (ctx *pContext) finish(err error) {
-	ctx.statusMu.Lock()
-	ctx.resultErr = err
-	ctx.statusMu.Unlock()
-	ctx.finishOnce.Do(func() {
-		close(ctx.finished)
-	})
-}
-
-// Running reports whether the pipeline run is still in progress.
-func (ctx *pContext) Running() bool {
-	select {
-	case <-ctx.finished:
-		return false
-	default:
-		return true
-	}
-}
-
-// Wait blocks until the pipeline run finishes and returns the joined
-// error: nil on success, a joined node error on failure, or a
-// cancellation error.
-func (ctx *pContext) Wait() error {
-	<-ctx.finished
-	ctx.statusMu.Lock()
-	defer ctx.statusMu.Unlock()
-	return ctx.resultErr
-}
-
 // NodeDone returns the channel that is closed when the node finishes.
 func (ctx *pContext) NodeDone(name string) (<-chan struct{}, error) {
 	ctx.nodesMu.Lock()
@@ -277,23 +250,46 @@ func (ctx *pContext) Errors() map[string]error {
 	return out
 }
 
+// setNodeResult records the result of a finished node and closes its
+// done channel. It is called by the execution runner.
+func (ctx *pContext) setNodeResult(name string, err error) {
+	ctx.nodesMu.Lock()
+	defer ctx.nodesMu.Unlock()
+	ctx.nodesErr[name] = err
+	close(ctx.nodesDone[name])
+}
+
+// finish records the final pipeline result and closes Done().
+// It is called by the execution runner.
+func (ctx *pContext) finish(err error) {
+	close(ctx.finished)
+	ctx.resultMu.Lock()
+	defer ctx.resultMu.Unlock()
+	ctx.resultErr = err
+}
+
+func (ctx *pContext) Wait() error {
+	select {
+	case <-ctx.finished:
+	case <-ctx.Done():
+		return errors.New("task has been interrupted")
+	}
+	ctx.resultMu.Lock()
+	defer ctx.resultMu.Unlock()
+	return ctx.resultErr
+}
+
 func (ctx *pContext) Interrupt() {
 	ctx.cancel()
 }
 
-// Done returns a channel that is closed when the whole pipeline run
-// finishes (success or failure).
-//
-// This is different from the embedded context.Context.Done, which only
-// fires on cancellation.
-func (ctx *pContext) Done() <-chan struct{} {
-	return ctx.finished
-}
-
-// Err returns the current result error without blocking. It returns nil
-// while the run is still in progress or has succeeded.
-func (ctx *pContext) Err() error {
-	ctx.statusMu.Lock()
-	defer ctx.statusMu.Unlock()
-	return ctx.resultErr
+func (ctx *pContext) IsRunning() bool {
+	select {
+	case <-ctx.finished:
+		return false
+	case <-ctx.Done():
+		return false
+	default:
+		return true
+	}
 }
