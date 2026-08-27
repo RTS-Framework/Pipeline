@@ -28,6 +28,9 @@ type Context interface {
 	// usually it get unique data from a list.
 	ID() int
 
+	// Env is used to get environment data in context.
+	Env(key string) any
+
 	// Logger is used to get logger from context, if Node want
 	// to write log, need call this method.
 	Logger() Logger
@@ -50,6 +53,16 @@ type Context interface {
 
 // Task is used to control Pipeline execute context.
 type Task interface {
+	// NodeDone returns the channel that is closed when the node finishes.
+	NodeDone(name string) (<-chan struct{}, error)
+
+	// NodeError returns the error recorded for a node.
+	// It returns nil for nodes that succeeded.
+	NodeError(name string) error
+
+	// Errors returns a copy of the per-node error map.
+	Errors() map[string]error
+
 	// IsRunning is used to check current task is still running.
 	IsRunning() bool
 
@@ -65,8 +78,9 @@ type Task interface {
 type pContext struct {
 	context.Context
 
-	// task id for get unique data from a list
-	id int
+	// copy from config
+	id  int
+	env map[string]any
 
 	logger Logger
 
@@ -84,7 +98,7 @@ type pContext struct {
 	// key is the node name
 	nodesDone map[string]chan struct{}
 	nodesErr  map[string]error
-	nodesMu   sync.Mutex
+	nodesRWM  sync.RWMutex
 
 	finished  chan struct{}
 	resultErr error
@@ -93,9 +107,9 @@ type pContext struct {
 	cancel context.CancelFunc
 }
 
-func (p *Pipeline) newContext(ctx context.Context, id int, opts *Options) (*pContext, error) {
+func (p *Pipeline) newContext(ctx context.Context, cfg *Config) (*pContext, error) {
 	// prepare the logger with discord if opts.Logger is nil
-	logger := opts.Logger
+	logger := cfg.Logger
 	if logger == nil {
 		logger = NewLogger(io.Discard)
 	}
@@ -120,7 +134,8 @@ func (p *Pipeline) newContext(ctx context.Context, id int, opts *Options) (*pCon
 		nodesDone[name] = make(chan struct{})
 	}
 	c := &pContext{
-		id:          id,
+		id:          cfg.ID,
+		env:         cfg.Env,
 		logger:      logger,
 		inputs:      inputs,
 		outputs:     outputs,
@@ -136,6 +151,10 @@ func (p *Pipeline) newContext(ctx context.Context, id int, opts *Options) (*pCon
 
 func (ctx *pContext) ID() int {
 	return ctx.id
+}
+
+func (ctx *pContext) Env(key string) any {
+	return ctx.env[key]
 }
 
 func (ctx *pContext) Logger() Logger {
@@ -220,10 +239,18 @@ func (ctx *pContext) checkOutputsWritten(node Node) error {
 	return fmt.Errorf(format, node.Name(), strings.Join(missing, ", "))
 }
 
-// NodeDone returns the channel that is closed when the node finishes.
+// setNodeError records the result of a finished node and closes its
+// done channel. It is called by the execution runner.
+func (ctx *pContext) setNodeError(name string, err error) {
+	ctx.nodesRWM.Lock()
+	defer ctx.nodesRWM.Unlock()
+	ctx.nodesErr[name] = err
+	close(ctx.nodesDone[name])
+}
+
 func (ctx *pContext) NodeDone(name string) (<-chan struct{}, error) {
-	ctx.nodesMu.Lock()
-	defer ctx.nodesMu.Unlock()
+	ctx.nodesRWM.RLock()
+	defer ctx.nodesRWM.RUnlock()
 	ch, ok := ctx.nodesDone[name]
 	if !ok {
 		return nil, fmt.Errorf("node %q is not found", name)
@@ -231,32 +258,20 @@ func (ctx *pContext) NodeDone(name string) (<-chan struct{}, error) {
 	return ch, nil
 }
 
-// NodeError returns the error recorded for a node. It returns nil for
-// nodes that succeeded.
 func (ctx *pContext) NodeError(name string) error {
-	ctx.nodesMu.Lock()
-	defer ctx.nodesMu.Unlock()
+	ctx.nodesRWM.RLock()
+	defer ctx.nodesRWM.RUnlock()
 	return ctx.nodesErr[name]
 }
 
-// Errors returns a copy of the per-node error map.
 func (ctx *pContext) Errors() map[string]error {
-	ctx.nodesMu.Lock()
-	defer ctx.nodesMu.Unlock()
-	out := make(map[string]error, len(ctx.nodesErr))
-	for name, e := range ctx.nodesErr {
-		out[name] = e
+	ctx.nodesRWM.RLock()
+	defer ctx.nodesRWM.RUnlock()
+	errs := make(map[string]error, len(ctx.nodesErr))
+	for name, err := range ctx.nodesErr {
+		errs[name] = err
 	}
-	return out
-}
-
-// setNodeResult records the result of a finished node and closes its
-// done channel. It is called by the execution runner.
-func (ctx *pContext) setNodeResult(name string, err error) {
-	ctx.nodesMu.Lock()
-	defer ctx.nodesMu.Unlock()
-	ctx.nodesErr[name] = err
-	close(ctx.nodesDone[name])
+	return errs
 }
 
 // finish records the final pipeline result and closes Done().
@@ -266,6 +281,17 @@ func (ctx *pContext) finish(err error) {
 	ctx.resultMu.Lock()
 	defer ctx.resultMu.Unlock()
 	ctx.resultErr = err
+}
+
+func (ctx *pContext) IsRunning() bool {
+	select {
+	case <-ctx.finished:
+		return false
+	case <-ctx.Done():
+		return false
+	default:
+		return true
+	}
 }
 
 func (ctx *pContext) Wait() error {
@@ -281,15 +307,4 @@ func (ctx *pContext) Wait() error {
 
 func (ctx *pContext) Interrupt() {
 	ctx.cancel()
-}
-
-func (ctx *pContext) IsRunning() bool {
-	select {
-	case <-ctx.finished:
-		return false
-	case <-ctx.Done():
-		return false
-	default:
-		return true
-	}
 }
