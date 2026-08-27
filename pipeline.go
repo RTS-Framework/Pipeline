@@ -4,31 +4,47 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime/debug"
 	"sync"
 )
 
-// Options contains the option for Pipeline.Execute.
-type Options struct {
-	Logger Logger
+// Config contains the configuration for execute Pipeline.
+type Config struct {
+	// task id for get unique data from a list
+	ID int `toml:"id" json:"id"`
 
+	// Env is used to get environment data in context.
+	Env map[string]any `toml:"env" json:"env"`
+
+	// the logger for node that will use.
+	Logger Logger `toml:"-" json:"-"`
+}
+
+// Options contains the options for create Pipeline.
+type Options struct {
 	BeforeNodeInitialize func(node Node) error
 	AfterNodeInitialize  func(node Node) error
 	BeforeNodeExecute    func(node Node) error
 	AfterNodeExecute     func(node Node) error
+	BeforeNodeClose      func(node Node) error
+	AfterNodeClose       func(node Node) error
 }
 
 // Pipeline is a parallel directed acyclic graph (DAG) of processing nodes.
 // It manages node registration, linking, validation, and execution.
 type Pipeline struct {
+	opts  Options
 	nodes map[string]Node
 	links map[string]*Link
 	rwm   sync.RWMutex
 }
 
 // NewPipeline is used to create a new empty Pipeline instance.
-func NewPipeline() *Pipeline {
+func NewPipeline(opts *Options) *Pipeline {
+	if opts == nil {
+		opts = new(Options)
+	}
 	pipeline := Pipeline{
+		opts:  *opts,
 		nodes: make(map[string]Node),
 		links: make(map[string]*Link),
 	}
@@ -50,9 +66,21 @@ func (p *Pipeline) AddNode(node Node) error {
 	if err == nil {
 		return fmt.Errorf("node \"%s\" already exists", name)
 	}
+	if p.opts.BeforeNodeInitialize != nil {
+		err = p.opts.BeforeNodeInitialize(node)
+		if err != nil {
+			return fmt.Errorf("[BeforeInitialize of Node %s]: %s", name, err)
+		}
+	}
 	err = node.Initialize()
 	if err != nil {
 		return fmt.Errorf("failed to initialize node: %s", err)
+	}
+	if p.opts.AfterNodeInitialize != nil {
+		err = p.opts.AfterNodeInitialize(node)
+		if err != nil {
+			return fmt.Errorf("[AfterInitialize of Node %s]: %s", name, err)
+		}
 	}
 	p.nodes[name] = node
 	return nil
@@ -72,9 +100,9 @@ func (p *Pipeline) RemoveNode(name string) error {
 		return err
 	}
 	delete(p.nodes, name)
-	err = node.Close()
+	err = p.closeNode(node)
 	if err != nil {
-		return fmt.Errorf("failed to clean node: %s", err)
+		return err
 	}
 	return nil
 }
@@ -84,6 +112,27 @@ func (p *Pipeline) getNode(name string) (Node, error) {
 		return node, nil
 	}
 	return nil, fmt.Errorf("node \"%s\" is not found", name)
+}
+
+func (p *Pipeline) closeNode(node Node) error {
+	name := node.Name()
+	if p.opts.BeforeNodeClose != nil {
+		err := p.opts.BeforeNodeClose(node)
+		if err != nil {
+			return fmt.Errorf("[BeforeClose of Node %s]: %s", name, err)
+		}
+	}
+	err := node.Close()
+	if err != nil {
+		return fmt.Errorf("failed to clean node: %s", err)
+	}
+	if p.opts.AfterNodeClose != nil {
+		err = p.opts.AfterNodeClose(node)
+		if err != nil {
+			return fmt.Errorf("[AfterClose of Node %s]: %s", name, err)
+		}
+	}
+	return nil
 }
 
 // Link is used to link a source node output slot to the destination
@@ -203,7 +252,7 @@ func (p *Pipeline) validate() error {
 }
 
 // checkInputSlots verifies that every required input slot is linked.
-// Optional input slots may stay unlinked; at runtime ReadInput returns
+// Optional input slots may stay unlinked; at runtime Read returns
 // (nil, nil) for them and the Node must skip them.
 func (p *Pipeline) checkInputSlots() error {
 	linked := make(map[string]struct{})
@@ -220,7 +269,7 @@ func (p *Pipeline) checkInputSlots() error {
 			slotName := slot.Name
 			key := nodeName + "." + slotName
 			if _, ok := linked[key]; !ok {
-				format := "required input slot not linked: %s.%s"
+				format := "required input slot is not linked: %s.%s"
 				return fmt.Errorf(format, nodeName, slotName)
 			}
 		}
@@ -240,7 +289,7 @@ func (p *Pipeline) checkOutputSlots() error {
 			slotName := slot.Name
 			key := nodeName + "." + slotName
 			if _, ok := linked[key]; !ok {
-				format := "output slot not linked: %s.%s"
+				format := "output slot is not linked: %s.%s"
 				return fmt.Errorf(format, nodeName, slotName)
 			}
 		}
@@ -338,6 +387,16 @@ func (p *Pipeline) checkNoCycle() error {
 	return nil
 }
 
+// Run is the synchronous form of Execute: it starts the pipeline and
+// blocks until the run finishes.
+func (p *Pipeline) Run(ctx context.Context, cfg *Config) error {
+	task, err := p.Execute(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	return task.Wait()
+}
+
 // Execute validates the pipeline, builds a run Context and starts the
 // run in the background, then returns immediately.
 //
@@ -346,105 +405,46 @@ func (p *Pipeline) checkNoCycle() error {
 //
 // Use the returned Context to inspect node status (Nodes / NodeDone /
 // NodeError / Errors), wait for completion (Wait), or interrupt the run
-// (Interrupt). Run is the synchronous convenience wrapper of Execute +
-// Wait.
-func (p *Pipeline) Execute(ctx context.Context, opts *Options) (*Context, error) {
-	if opts == nil {
-		opts = &Options{}
-	}
-
-	if !p.runMu.TryLock() {
-		return nil, errors.New("pipeline is already running")
-	}
-
-	// Validate and snapshot the graph under one read lock, then release
-	// it before executing. Node code can call Pipeline methods during
-	// Execute without deadlocking.
-	p.rwm.RLock()
-	if err := p.validate(); err != nil {
-		p.rwm.RUnlock()
-		p.runMu.Unlock()
+// (Interrupt).
+func (p *Pipeline) Execute(ctx context.Context, cfg *Config) (Task, error) {
+	p.rwm.RUnlock()
+	defer p.rwm.RUnlock()
+	err := p.validate()
+	if err != nil {
 		return nil, err
 	}
-	pCtx, err := p.newContext(ctx, opts)
+	pCtx, err := p.newContext(ctx, cfg)
 	if err != nil {
-		p.rwm.RUnlock()
-		p.runMu.Unlock()
 		return nil, err
 	}
 	nodes := make(map[string]Node, len(p.nodes))
 	for name, node := range p.nodes {
 		nodes[name] = node
 	}
-	p.rwm.RUnlock()
-
 	go func() {
-		defer p.runMu.Unlock()
-		p.run(pCtx, nodes, opts)
+		err := p.execute(pCtx, nodes)
+		pCtx.finish(err)
 	}()
 	return pCtx, nil
 }
 
-// Run is the synchronous form of Execute: it starts the pipeline and
-// blocks until the run finishes.
-func (p *Pipeline) Run(ctx context.Context, opts *Options) error {
-	pCtx, err := p.Execute(ctx, opts)
-	if err != nil {
-		return err
-	}
-	return pCtx.Wait()
-}
-
-// run executes the background run and records the final result into
-// the Context.
-func (p *Pipeline) run(pCtx *Context, nodes map[string]Node, opts *Options) {
-	pCtx.finish(p.runNodes(pCtx, nodes, opts))
-}
-
-// runNodes starts every node concurrently and waits for all of them.
-//
-// The framework does not enforce ordering: nodes must follow the node
-// contract (read inputs through ctx.ReadInput, write every linked
-// output slot through ctx.WriteOutput). When any node fails, the
-// context is canceled so compliant nodes can abort their blocking reads.
-func (p *Pipeline) runNodes(pCtx *Context, nodes map[string]Node, opts *Options) error {
-	if e := pCtx.Err(); e != nil {
-		return fmt.Errorf("pipeline canceled: %w", e)
-	}
-
-	names := pCtx.Nodes()
-
+func (p *Pipeline) execute(ctx *pContext, nodes map[string]Node) error {
 	var wg sync.WaitGroup
-	for _, name := range names {
+	for name, node := range nodes {
 		wg.Add(1)
-		go func(name string) {
+		go func(name string, node Node) {
 			defer wg.Done()
-
-			node := nodes[name]
-			err := p.executeNode(pCtx, node, opts)
-
-			pCtx.setNodeResult(name, err)
-			if err != nil {
-				// Fail fast: let every compliant node abort via ctx.Done.
-				pCtx.Interrupt()
-			}
-		}(name)
+			err := p.executeNode(ctx, node)
+			ctx.setNodeError(name, err)
+		}(name, node)
 	}
-
 	wg.Wait()
-
-	// Aggregate all failures.
 	var errs []error
-	for _, name := range names {
-		if e := pCtx.NodeError(name); e != nil {
-			errs = append(errs, fmt.Errorf("node %q: %w", name, e))
-		}
+	for name, err := range ctx.Errors() {
+		errs = append(errs, fmt.Errorf("node %s: %s", name, err))
 	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)
-	}
-	if e := pCtx.Err(); e != nil {
-		return fmt.Errorf("pipeline canceled: %w", e)
 	}
 	return nil
 }
@@ -452,41 +452,37 @@ func (p *Pipeline) runNodes(pCtx *Context, nodes map[string]Node, opts *Options)
 // executeNode runs one node with surrounding hooks, panic recovery and
 // output integrity checking. AfterNodeExecute always runs, even when
 // the node's Execute panics.
-func (p *Pipeline) executeNode(pCtx *Context, node Node, opts *Options) (err error) {
+func (p *Pipeline) executeNode(ctx *pContext, node Node) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = errors.Join(err,
-				fmt.Errorf("node %q panic: %v\n%s", node.Name(), r, debug.Stack()))
+			err = errors.New("panic: " + fmt.Sprint(r))
 		}
 	}()
 
-	if opts.BeforeNodeExecute != nil {
-		if e := opts.BeforeNodeExecute(node); e != nil {
-			return errors.Join(err,
-				fmt.Errorf("BeforeNodeExecute(%q): %w", node.Name(), e))
+	name := node.Name()
+	if p.opts.BeforeNodeExecute != nil {
+		err = p.opts.BeforeNodeExecute(node)
+		if err != nil {
+			return fmt.Errorf("[BeforeExecute of Node %s]: %s", name, err)
 		}
 	}
-
-	if opts.AfterNodeExecute != nil {
-		defer func() {
-			if e := opts.AfterNodeExecute(node); e != nil {
-				err = errors.Join(err,
-					fmt.Errorf("AfterNodeExecute(%q): %w", node.Name(), e))
-			}
-		}()
+	err = node.Execute(ctx)
+	if err != nil {
+		return err
 	}
-
-	err = node.Execute(pCtx)
-	// Output integrity check: a node that returns success while the
-	// pipeline is still healthy must have written every linked output
-	// slot. Skip the check when the context was canceled, so a node that
-	// aborted on cancellation is not falsely blamed for a missing write.
-	if err == nil && pCtx.Err() == nil {
-		if e := pCtx.checkOutputsWritten(node); e != nil {
-			err = e
+	if err == nil && ctx.Err() == nil {
+		err = ctx.checkOutputsWritten(node)
+		if err != nil {
+			return err
 		}
 	}
-	return err
+	if p.opts.AfterNodeExecute != nil {
+		err = p.opts.AfterNodeExecute(node)
+		if err != nil {
+			return fmt.Errorf("[AfterExecute of Node %s]: %s", name, err)
+		}
+	}
+	return nil
 }
 
 // Close is used to release all resources held by the pipeline.
@@ -496,7 +492,7 @@ func (p *Pipeline) Close() error {
 	p.rwm.Lock()
 	defer p.rwm.Unlock()
 	for _, node := range p.nodes {
-		err := node.Close()
+		err := p.closeNode(node)
 		if err != nil {
 			return err
 		}
