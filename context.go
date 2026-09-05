@@ -193,7 +193,11 @@ func (ctx *pContext) isInputRead(key string) bool {
 }
 
 func (ctx *pContext) Write(node Node, slot string, art *Artifact) error {
-	_, err := getNodeOutputSlot(node, slot)
+	s, err := getNodeOutputSlot(node, slot)
+	if err != nil {
+		return err
+	}
+	err = CheckArtifactData(s.Type.Name, art.Data)
 	if err != nil {
 		return err
 	}
