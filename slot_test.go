@@ -6,6 +6,52 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIsSlotTypeMatched(t *testing.T) {
+	t.Run("matched", func(t *testing.T) {
+		accepted := []ArtifactType{testTypeA}
+
+		ok := isSlotTypeMatched(accepted, testTypeA)
+		require.True(t, ok)
+	})
+
+	t.Run("matched with different case", func(t *testing.T) {
+		accepted := []ArtifactType{testTypeA}
+		typ := ArtifactType{Name: "testtypea"}
+
+		ok := isSlotTypeMatched(accepted, typ)
+		require.True(t, ok)
+	})
+
+	t.Run("matched without description", func(t *testing.T) {
+		accepted := []ArtifactType{{Name: testTypeA.Name}}
+		typ := testTypeA
+
+		ok := isSlotTypeMatched(accepted, typ)
+		require.True(t, ok)
+	})
+
+	t.Run("matched among many", func(t *testing.T) {
+		accepted := []ArtifactType{testTypeA, testTypeB, testTypeC}
+		typ := testTypeB
+
+		ok := isSlotTypeMatched(accepted, typ)
+		require.True(t, ok)
+	})
+
+	t.Run("not matched", func(t *testing.T) {
+		accepted := []ArtifactType{testTypeA}
+		typ := testTypeB
+
+		ok := isSlotTypeMatched(accepted, typ)
+		require.False(t, ok)
+	})
+
+	t.Run("empty accepted", func(t *testing.T) {
+		ok := isSlotTypeMatched(nil, testTypeA)
+		require.False(t, ok)
+	})
+}
+
 func TestCheckNodeSlots(t *testing.T) {
 	t.Run("no slots", func(t *testing.T) {
 		node := testNewTestNode("empty")
@@ -15,7 +61,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("single input", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{{Name: "only"}}
 
 		err := CheckNodeSlots(node)
@@ -23,7 +69,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("single output", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.outputs = []*OutputSlot{{Name: "only"}}
 
 		err := CheckNodeSlots(node)
@@ -31,7 +77,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("unique inputs", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
 			{Name: "a"},
 			{Name: "b"},
@@ -43,7 +89,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("unique outputs", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.outputs = []*OutputSlot{
 			{Name: "out1"},
 			{Name: "out2"},
@@ -54,7 +100,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("unique inputs and outputs", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
 			{Name: "in1"},
 			{Name: "in2"},
@@ -70,7 +116,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("inputs only", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
 			{Name: "a"},
 			{Name: "b"},
@@ -81,7 +127,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("outputs only", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.outputs = []*OutputSlot{
 			{Name: "a"},
 			{Name: "b"},
@@ -92,7 +138,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("duplicate input slot name", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
 			{Name: "data"},
 			{Name: "data"},
@@ -105,7 +151,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("duplicate output slot name", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.outputs = []*OutputSlot{
 			{Name: "result"},
 			{Name: "result"},
@@ -118,7 +164,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("duplicate input among many", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
 			{Name: "a"},
 			{Name: "b"},
@@ -131,7 +177,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("duplicate output among many", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.outputs = []*OutputSlot{
 			{Name: "a"},
 			{Name: "b"},
@@ -144,7 +190,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("duplicate inputs and outputs", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
 			{Name: "dup"},
 			{Name: "dup"},
@@ -160,7 +206,7 @@ func TestCheckNodeSlots(t *testing.T) {
 	})
 
 	t.Run("triple duplicate", func(t *testing.T) {
-		node := testNewTestNode("n")
+		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
 			{Name: "same"},
 			{Name: "same"},
