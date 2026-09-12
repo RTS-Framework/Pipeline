@@ -9,7 +9,7 @@ import (
 
 func TestLink(t *testing.T) {
 	t.Run("common", func(t *testing.T) {
-		pipeline := NewPipeline()
+		pipeline := NewPipeline(nil)
 
 		nodeA := testNewTestNode("A")
 		nodeA.outputs = []*OutputSlot{
@@ -34,7 +34,7 @@ func TestLink(t *testing.T) {
 	})
 
 	t.Run("unknown src node", func(t *testing.T) {
-		pipeline := NewPipeline()
+		pipeline := NewPipeline(nil)
 
 		nodeB := testNewTestNode("B")
 		nodeB.inputs = []*InputSlot{
@@ -52,7 +52,7 @@ func TestLink(t *testing.T) {
 	})
 
 	t.Run("unknown dst node", func(t *testing.T) {
-		pipeline := NewPipeline()
+		pipeline := NewPipeline(nil)
 
 		nodeA := testNewTestNode("A")
 		nodeA.outputs = []*OutputSlot{
@@ -70,7 +70,7 @@ func TestLink(t *testing.T) {
 	})
 
 	t.Run("unknown src slot", func(t *testing.T) {
-		pipeline := NewPipeline()
+		pipeline := NewPipeline(nil)
 
 		nodeA := testNewTestNode("A")
 		nodeA.outputs = []*OutputSlot{
@@ -94,7 +94,7 @@ func TestLink(t *testing.T) {
 	})
 
 	t.Run("unknown dst slot", func(t *testing.T) {
-		pipeline := NewPipeline()
+		pipeline := NewPipeline(nil)
 
 		nodeA := testNewTestNode("A")
 		nodeA.outputs = []*OutputSlot{
@@ -118,7 +118,7 @@ func TestLink(t *testing.T) {
 	})
 
 	t.Run("mismatched slot type", func(t *testing.T) {
-		pipeline := NewPipeline()
+		pipeline := NewPipeline(nil)
 
 		nodeA := testNewTestNode("A")
 		nodeA.outputs = []*OutputSlot{
@@ -142,7 +142,7 @@ func TestLink(t *testing.T) {
 	})
 
 	t.Run("duplicate link", func(t *testing.T) {
-		pipeline := NewPipeline()
+		pipeline := NewPipeline(nil)
 
 		nodeA := testNewTestNode("A")
 		nodeA.outputs = []*OutputSlot{
@@ -168,7 +168,7 @@ func TestLink(t *testing.T) {
 	})
 
 	t.Run("one output to many inputs", func(t *testing.T) {
-		pipeline := NewPipeline()
+		pipeline := NewPipeline(nil)
 
 		nodeA := testNewTestNode("A")
 		nodeA.outputs = []*OutputSlot{
@@ -202,7 +202,7 @@ func TestLink(t *testing.T) {
 
 func TestUnlink(t *testing.T) {
 	t.Run("common", func(t *testing.T) {
-		pipeline := NewPipeline()
+		pipeline := NewPipeline(nil)
 
 		nodeA := testNewTestNode("A")
 		nodeA.outputs = []*OutputSlot{
@@ -228,7 +228,7 @@ func TestUnlink(t *testing.T) {
 	})
 
 	t.Run("link not found", func(t *testing.T) {
-		pipeline := NewPipeline()
+		pipeline := NewPipeline(nil)
 
 		nodeA := testNewTestNode("A")
 		nodeA.outputs = []*OutputSlot{
@@ -253,7 +253,7 @@ func TestUnlink(t *testing.T) {
 }
 
 func TestLink_String(t *testing.T) {
-	pipeline := NewPipeline()
+	pipeline := NewPipeline(nil)
 
 	nodeA := testNewTestNode("A")
 	nodeA.outputs = []*OutputSlot{
