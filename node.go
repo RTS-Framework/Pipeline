@@ -13,16 +13,16 @@ import (
 //   - All nodes of one Execute start at the same time; never assume an
 //     execution order between nodes.
 //
-//   - Read every input slot through ctx.ReadInput exactly once. An
+//   - Read every input slot through ctx.Read exactly once. An
 //     optional slot that is not linked returns (nil, nil) and must be
 //     skipped; a second read is an error.
 //
-//   - Write every linked output slot through ctx.WriteOutput exactly
+//   - Write every linked output slot through ctx.Write exactly
 //     once before returning nil. Missing or duplicate writes are
 //     reported as node errors.
 //
 //   - Blocking reads must select on ctx.Done() so a failed node does
-//     not leave other nodes waiting forever. ctx.ReadInput already
+//     not leave other nodes waiting forever. ctx.Read already
 //     handles cancellation internally.
 //
 //   - Node.Execute must be safe for concurrent use by multiple
@@ -64,28 +64,6 @@ type Node interface {
 	// Close is used to release the resources held by this Node,
 	// it will be called once when this Node be removed or Pipeline Close.
 	Close() error
-}
-
-// CheckNode is used to check this Node implement is valid.
-func CheckNode(node Node) error {
-	// check the same input/output slot name
-	inputs := node.Inputs()
-	iNames := make(map[string]struct{}, len(inputs))
-	for _, slot := range inputs {
-		if _, ok := iNames[slot.Name]; ok {
-			return fmt.Errorf("duplicate input slot name: \"%s\"", slot.Name)
-		}
-		iNames[slot.Name] = struct{}{}
-	}
-	outputs := node.Outputs()
-	oNames := make(map[string]struct{}, len(outputs))
-	for _, slot := range outputs {
-		if _, ok := oNames[slot.Name]; ok {
-			return fmt.Errorf("duplicate output slot name: \"%s\"", slot.Name)
-		}
-		oNames[slot.Name] = struct{}{}
-	}
-	return nil
 }
 
 func getNodeInputSlot(node Node, name string) (*InputSlot, error) {
