@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"fmt"
-	"slices"
 )
 
 // InputSlot contains the input slot information.
@@ -33,7 +32,13 @@ type OutputSlot struct {
 }
 
 func isSlotTypeMatched(accepted []ArtifactType, typ ArtifactType) bool {
-	return slices.Contains(accepted, typ)
+	key := typ.key()
+	for _, item := range accepted {
+		if item.key() == key {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckNodeSlots is used to check this Node implement is valid.
