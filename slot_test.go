@@ -60,28 +60,12 @@ func TestCheckNodeSlots(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("single input", func(t *testing.T) {
-		node := testNewTestNode("test")
-		node.inputs = []*InputSlot{{Name: "only"}}
-
-		err := CheckNodeSlots(node)
-		require.NoError(t, err)
-	})
-
-	t.Run("single output", func(t *testing.T) {
-		node := testNewTestNode("test")
-		node.outputs = []*OutputSlot{{Name: "only"}}
-
-		err := CheckNodeSlots(node)
-		require.NoError(t, err)
-	})
-
 	t.Run("unique inputs", func(t *testing.T) {
 		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
-			{Name: "a"},
-			{Name: "b"},
-			{Name: "c"},
+			{Name: "a", Accepted: []ArtifactType{testTypeA}},
+			{Name: "b", Accepted: []ArtifactType{testTypeB}},
+			{Name: "c", Accepted: []ArtifactType{testTypeC}},
 		}
 
 		err := CheckNodeSlots(node)
@@ -91,8 +75,8 @@ func TestCheckNodeSlots(t *testing.T) {
 	t.Run("unique outputs", func(t *testing.T) {
 		node := testNewTestNode("test")
 		node.outputs = []*OutputSlot{
-			{Name: "out1"},
-			{Name: "out2"},
+			{Name: "out1", Type: testTypeA},
+			{Name: "out2", Type: testTypeB},
 		}
 
 		err := CheckNodeSlots(node)
@@ -102,13 +86,13 @@ func TestCheckNodeSlots(t *testing.T) {
 	t.Run("unique inputs and outputs", func(t *testing.T) {
 		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
-			{Name: "in1"},
-			{Name: "in2"},
+			{Name: "in1", Accepted: []ArtifactType{testTypeA}},
+			{Name: "in2", Accepted: []ArtifactType{testTypeB}},
 		}
 		node.outputs = []*OutputSlot{
-			{Name: "out1"},
-			{Name: "out2"},
-			{Name: "out3"},
+			{Name: "out1", Type: testTypeA},
+			{Name: "out2", Type: testTypeB},
+			{Name: "out3", Type: testTypeC},
 		}
 
 		err := CheckNodeSlots(node)
@@ -118,8 +102,8 @@ func TestCheckNodeSlots(t *testing.T) {
 	t.Run("inputs only", func(t *testing.T) {
 		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
-			{Name: "a"},
-			{Name: "b"},
+			{Name: "a", Accepted: []ArtifactType{testTypeA}},
+			{Name: "b", Accepted: []ArtifactType{testTypeB}},
 		}
 
 		err := CheckNodeSlots(node)
@@ -129,8 +113,19 @@ func TestCheckNodeSlots(t *testing.T) {
 	t.Run("outputs only", func(t *testing.T) {
 		node := testNewTestNode("test")
 		node.outputs = []*OutputSlot{
-			{Name: "a"},
-			{Name: "b"},
+			{Name: "a", Type: testTypeA},
+			{Name: "b", Type: testTypeB},
+		}
+
+		err := CheckNodeSlots(node)
+		require.NoError(t, err)
+	})
+
+	t.Run("input with many accepted types", func(t *testing.T) {
+		node := testNewTestNode("test")
+		node.inputs = []*InputSlot{
+			{Name: "a", Accepted: []ArtifactType{testTypeA, testTypeB, testTypeC}},
+			{Name: "b", Accepted: []ArtifactType{testTypeB, testTypeC}},
 		}
 
 		err := CheckNodeSlots(node)
@@ -140,8 +135,8 @@ func TestCheckNodeSlots(t *testing.T) {
 	t.Run("duplicate input slot name", func(t *testing.T) {
 		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
-			{Name: "data"},
-			{Name: "data"},
+			{Name: "data", Accepted: []ArtifactType{testTypeA}},
+			{Name: "data", Accepted: []ArtifactType{testTypeA}},
 		}
 
 		err := CheckNodeSlots(node)
@@ -153,8 +148,8 @@ func TestCheckNodeSlots(t *testing.T) {
 	t.Run("duplicate output slot name", func(t *testing.T) {
 		node := testNewTestNode("test")
 		node.outputs = []*OutputSlot{
-			{Name: "result"},
-			{Name: "result"},
+			{Name: "result", Type: testTypeA},
+			{Name: "result", Type: testTypeA},
 		}
 
 		err := CheckNodeSlots(node)
@@ -166,9 +161,9 @@ func TestCheckNodeSlots(t *testing.T) {
 	t.Run("duplicate input among many", func(t *testing.T) {
 		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
-			{Name: "a"},
-			{Name: "b"},
-			{Name: "a"},
+			{Name: "a", Accepted: []ArtifactType{testTypeA}},
+			{Name: "b", Accepted: []ArtifactType{testTypeB}},
+			{Name: "a", Accepted: []ArtifactType{testTypeA}},
 		}
 
 		err := CheckNodeSlots(node)
@@ -179,9 +174,9 @@ func TestCheckNodeSlots(t *testing.T) {
 	t.Run("duplicate output among many", func(t *testing.T) {
 		node := testNewTestNode("test")
 		node.outputs = []*OutputSlot{
-			{Name: "a"},
-			{Name: "b"},
-			{Name: "a"},
+			{Name: "a", Type: testTypeA},
+			{Name: "b", Type: testTypeB},
+			{Name: "a", Type: testTypeA},
 		}
 
 		err := CheckNodeSlots(node)
@@ -192,12 +187,12 @@ func TestCheckNodeSlots(t *testing.T) {
 	t.Run("duplicate inputs and outputs", func(t *testing.T) {
 		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
-			{Name: "dup"},
-			{Name: "dup"},
+			{Name: "dup", Accepted: []ArtifactType{testTypeA}},
+			{Name: "dup", Accepted: []ArtifactType{testTypeA}},
 		}
 		node.outputs = []*OutputSlot{
-			{Name: "dup"},
-			{Name: "dup"},
+			{Name: "dup", Type: testTypeA},
+			{Name: "dup", Type: testTypeA},
 		}
 
 		err := CheckNodeSlots(node)
@@ -208,14 +203,47 @@ func TestCheckNodeSlots(t *testing.T) {
 	t.Run("triple duplicate", func(t *testing.T) {
 		node := testNewTestNode("test")
 		node.inputs = []*InputSlot{
-			{Name: "same"},
-			{Name: "same"},
-			{Name: "same"},
+			{Name: "same", Accepted: []ArtifactType{testTypeA}},
+			{Name: "same", Accepted: []ArtifactType{testTypeA}},
+			{Name: "same", Accepted: []ArtifactType{testTypeA}},
 		}
 
 		err := CheckNodeSlots(node)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "duplicate input slot name")
 		require.ErrorContains(t, err, "same")
+	})
+
+	t.Run("empty accepted in input", func(t *testing.T) {
+		node := testNewTestNode("test")
+		node.inputs = []*InputSlot{
+			{Name: "empty", Accepted: []ArtifactType{}},
+		}
+
+		err := CheckNodeSlots(node)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "empty accepted artifact type")
+	})
+
+	t.Run("unregistered artifact type in input", func(t *testing.T) {
+		node := testNewTestNode("test")
+		node.inputs = []*InputSlot{
+			{Name: "unknown", Accepted: []ArtifactType{{Name: "unknown"}}},
+		}
+
+		err := CheckNodeSlots(node)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "is not registered")
+	})
+
+	t.Run("unregistered artifact type in output", func(t *testing.T) {
+		node := testNewTestNode("test")
+		node.outputs = []*OutputSlot{
+			{Name: "unknown", Type: ArtifactType{Name: "unknown"}},
+		}
+
+		err := CheckNodeSlots(node)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "is not registered")
 	})
 }
