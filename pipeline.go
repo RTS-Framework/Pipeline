@@ -15,10 +15,10 @@ type Config struct {
 	// Env is used to get environment data in context.
 	Env map[string]any `toml:"env" json:"env"`
 
-	// execute node with serial mode, default is parallel.
+	// execute node with serial mode for debug, default is parallel.
 	Serial bool `toml:"serial" json:"serial"`
 
-	// the logger for node that will use.
+	// the logger for the Node that will be used.
 	Logger Logger `toml:"-" json:"-"`
 }
 
@@ -406,9 +406,6 @@ func (p *Pipeline) Run(ctx context.Context, cfg *Config) error {
 // Execute validates the pipeline, builds a run Context and starts the
 // run in the background, then returns immediately.
 //
-// Only one execution is allowed at a time: calling Execute again while
-// a run is in progress returns an error.
-//
 // Use the returned Context to inspect node status (Nodes / NodeDone /
 // NodeError / Errors), wait for completion (Wait), or interrupt the run
 // (Interrupt).
@@ -442,9 +439,9 @@ func (p *Pipeline) execute(ctx *pContext, nodes map[string]Node) error {
 			defer wg.Done()
 			err := p.executeNode(ctx, node)
 			if err != nil {
+				ctx.setNodeError(name, err)
 				ctx.Interrupt()
 			}
-			ctx.setNodeError(name, err)
 		}(name, node)
 	}
 	wg.Wait()
@@ -459,8 +456,7 @@ func (p *Pipeline) execute(ctx *pContext, nodes map[string]Node) error {
 }
 
 // executeNode runs one node with surrounding hooks, panic recovery and
-// output integrity checking. AfterNodeExecute always runs, even when
-// the node's Execute panics.
+// output integrity checking.
 func (p *Pipeline) executeNode(ctx *pContext, node Node) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -480,6 +476,10 @@ func (p *Pipeline) executeNode(ctx *pContext, node Node) (err error) {
 		return err
 	}
 	if err == nil && ctx.Err() == nil {
+		err = ctx.checkInputsRead(node)
+		if err != nil {
+			return err
+		}
 		err = ctx.checkOutputsWritten(node)
 		if err != nil {
 			return err

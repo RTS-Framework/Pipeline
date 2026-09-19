@@ -192,6 +192,24 @@ func (ctx *pContext) isInputRead(key string) bool {
 	return false
 }
 
+func (ctx *pContext) checkInputsRead(node Node) error {
+	var missing []string
+	for _, slot := range node.Inputs() {
+		if slot.Optional {
+			continue
+		}
+		key := node.Name() + "." + slot.Name
+		if !ctx.isInputRead(key) {
+			missing = append(missing, slot.Name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	format := "node %s execute success but not read artifact from input slot(s): %s"
+	return fmt.Errorf(format, node.Name(), strings.Join(missing, ", "))
+}
+
 func (ctx *pContext) Write(node Node, slot string, art *Artifact) error {
 	s, err := getNodeOutputSlot(node, slot)
 	if err != nil {
@@ -226,8 +244,6 @@ func (ctx *pContext) isOutputWritten(key string) bool {
 	return false
 }
 
-// checkOutputsWritten verifies that a node that completed successfully
-// wrote exactly one Artifact to every linked output slot.
 func (ctx *pContext) checkOutputsWritten(node Node) error {
 	var missing []string
 	for _, slot := range node.Outputs() {
@@ -276,7 +292,9 @@ func (ctx *pContext) Errors() map[string]error {
 	defer ctx.nodesRWM.RUnlock()
 	errs := make(map[string]error, len(ctx.nodesErr))
 	for name, err := range ctx.nodesErr {
-		errs[name] = err
+		if err != nil {
+			errs[name] = err
+		}
 	}
 	return errs
 }
@@ -284,10 +302,10 @@ func (ctx *pContext) Errors() map[string]error {
 // finish records the final pipeline result and closes Done().
 // It is called by the execution runner.
 func (ctx *pContext) finish(err error) {
-	close(ctx.finished)
 	ctx.resultMu.Lock()
 	defer ctx.resultMu.Unlock()
 	ctx.resultErr = err
+	close(ctx.finished)
 }
 
 func (ctx *pContext) IsRunning() bool {
