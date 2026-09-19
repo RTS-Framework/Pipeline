@@ -9,11 +9,14 @@ import (
 
 // Config contains the configuration for execute Pipeline.
 type Config struct {
-	// task id for get unique data from a list
+	// task id for get unique data from a list.
 	ID int `toml:"id" json:"id"`
 
 	// Env is used to get environment data in context.
 	Env map[string]any `toml:"env" json:"env"`
+
+	// execute node with serial mode, default is parallel.
+	Serial bool `toml:"serial" json:"serial"`
 
 	// the logger for node that will use.
 	Logger Logger `toml:"-" json:"-"`
@@ -52,10 +55,10 @@ func NewPipeline(opts *Options) *Pipeline {
 }
 
 // AddNode is used to register a new node to the pipeline.
-// The node must pass validation (see CheckNode) and have a unique name.
+// The node must pass validation (see CheckNodeSlots) and have a unique name.
 // Upon successful addition, the node's Initialize method is called once.
 func (p *Pipeline) AddNode(node Node) error {
-	err := CheckNode(node)
+	err := CheckNodeSlots(node)
 	if err != nil {
 		return err
 	}
@@ -262,7 +265,7 @@ func (p *Pipeline) checkInputSlots() error {
 	}
 	for _, node := range p.nodes {
 		for _, slot := range node.Inputs() {
-			if !slot.Required {
+			if slot.Optional {
 				continue
 			}
 			nodeName := node.Name()
@@ -285,11 +288,14 @@ func (p *Pipeline) checkOutputSlots() error {
 	}
 	for _, node := range p.nodes {
 		for _, slot := range node.Outputs() {
+			if slot.Optional {
+				continue
+			}
 			nodeName := node.Name()
 			slotName := slot.Name
 			key := nodeName + "." + slotName
 			if _, ok := linked[key]; !ok {
-				format := "output slot is not linked: %s.%s"
+				format := "required output slot is not linked: %s.%s"
 				return fmt.Errorf(format, nodeName, slotName)
 			}
 		}
@@ -407,7 +413,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg *Config) error {
 // NodeError / Errors), wait for completion (Wait), or interrupt the run
 // (Interrupt).
 func (p *Pipeline) Execute(ctx context.Context, cfg *Config) (Task, error) {
-	p.rwm.RUnlock()
+	p.rwm.RLock()
 	defer p.rwm.RUnlock()
 	err := p.validate()
 	if err != nil {
@@ -435,6 +441,9 @@ func (p *Pipeline) execute(ctx *pContext, nodes map[string]Node) error {
 		go func(name string, node Node) {
 			defer wg.Done()
 			err := p.executeNode(ctx, node)
+			if err != nil {
+				ctx.Interrupt()
+			}
 			ctx.setNodeError(name, err)
 		}(name, node)
 	}

@@ -197,7 +197,7 @@ func (ctx *pContext) Write(node Node, slot string, art *Artifact) error {
 	if err != nil {
 		return err
 	}
-	err = CheckArtifactData(s.Type.Name, art.Data)
+	err = CheckArtifactData(s.Type, art.Data)
 	if err != nil {
 		return err
 	}
@@ -231,6 +231,9 @@ func (ctx *pContext) isOutputWritten(key string) bool {
 func (ctx *pContext) checkOutputsWritten(node Node) error {
 	var missing []string
 	for _, slot := range node.Outputs() {
+		if slot.Optional {
+			continue
+		}
 		key := node.Name() + "." + slot.Name
 		if !ctx.isOutputWritten(key) {
 			missing = append(missing, slot.Name)

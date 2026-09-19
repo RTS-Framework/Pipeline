@@ -13,7 +13,7 @@ type InputSlot struct {
 	Description string `toml:"description" json:"description"`
 
 	// this slot must be linked with another output slot.
-	Required bool `toml:"required" json:"required"`
+	Optional bool `toml:"optional" json:"optional"`
 
 	// defines this slot accepted artifact type.
 	Accepted []ArtifactType `toml:"accepted" json:"accepted"`
@@ -28,7 +28,7 @@ type OutputSlot struct {
 	Description string `toml:"description" json:"description"`
 
 	// this slot must be linked with another input slot.
-	Required bool `toml:"required" json:"required"`
+	Optional bool `toml:"optional" json:"optional"`
 
 	// defines this slot output artifact type.
 	Type ArtifactType `toml:"type" json:"type"`
