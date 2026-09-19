@@ -27,6 +27,9 @@ type OutputSlot struct {
 	// Description contains this slot information.
 	Description string `toml:"description" json:"description"`
 
+	// this slot must be linked with another input slot.
+	Required bool `toml:"required" json:"required"`
+
 	// defines this slot output artifact type.
 	Type ArtifactType `toml:"type" json:"type"`
 }
@@ -50,6 +53,15 @@ func CheckNodeSlots(node Node) error {
 		if _, ok := iNames[slot.Name]; ok {
 			return fmt.Errorf("duplicate input slot name: \"%s\"", slot.Name)
 		}
+		if len(slot.Accepted) == 0 {
+			return fmt.Errorf("input slot \"%s\" with empty accepted artifact type", slot.Name)
+		}
+		for i := 0; i < len(slot.Accepted); i++ {
+			accepted := slot.Accepted[i]
+			if !LookupArtifactType(accepted) {
+				return fmt.Errorf("artifact type \"%s\" is not registered", accepted.Name)
+			}
+		}
 		iNames[slot.Name] = struct{}{}
 	}
 	outputs := node.Outputs()
@@ -57,6 +69,9 @@ func CheckNodeSlots(node Node) error {
 	for _, slot := range outputs {
 		if _, ok := oNames[slot.Name]; ok {
 			return fmt.Errorf("duplicate output slot name: \"%s\"", slot.Name)
+		}
+		if !LookupArtifactType(slot.Type) {
+			return fmt.Errorf("artifact type \"%s\" is not registered", slot.Type.Name)
 		}
 		oNames[slot.Name] = struct{}{}
 	}
